@@ -19,7 +19,8 @@ import (
 	"os"
 	"strconv"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 	"github.com/joho/godotenv"
 	"google.golang.org/genai"
 
@@ -29,13 +30,15 @@ import (
 	"google.golang.org/adk/plugin"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/functiontool"
 
 	"github.com/neokn/agenticsystem/internal/agentdef"
 	"github.com/neokn/agenticsystem/internal/memory"
+	"github.com/neokn/agenticsystem/internal/shelltool"
 )
 
 // checkBotToken returns an error if TELEGRAM_BOT_TOKEN is not set.
-// Acceptance criterion: process must fail-fast with a human-readable message.
 func checkBotToken() error {
 	if os.Getenv("TELEGRAM_BOT_TOKEN") == "" {
 		return fmt.Errorf("TELEGRAM_BOT_TOKEN is not set")
@@ -52,70 +55,73 @@ func checkAPIKey() error {
 }
 
 // runBot assembles all components and starts the Long Polling loop.
-// It mirrors the wiring in cmd/agent/main.go exactly (ADR-0005).
 func runBot(ctx context.Context) error {
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 
-	// --- Step 0: Load agent definition ---
+	// --- Load agent definition ---
 	def, err := agentdef.Load(".", "demo_agent")
 	if err != nil {
-		return fmt.Errorf("failed to load agent definition: %w", err)
+		return fmt.Errorf("loading agent definition: %w", err)
 	}
 
-	// --- Step 1: genai client (for compress worker) ---
+	// --- genai client (for compress worker) ---
 	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey})
 	if err != nil {
-		return fmt.Errorf("failed to create genai client: %w", err)
+		return fmt.Errorf("creating genai client: %w", err)
 	}
 
-	// --- Step 2: Model profile ---
+	// --- Model profile ---
 	reg, err := memory.NewRegistry()
 	if err != nil {
-		return fmt.Errorf("failed to create model registry: %w", err)
+		return fmt.Errorf("creating registry: %w", err)
 	}
 	profile, err := reg.GetProfile(def.ModelID)
 	if err != nil {
-		return fmt.Errorf("failed to get model profile: %w", err)
+		return fmt.Errorf("getting profile: %w", err)
 	}
 	profile.CompressModelID = "gemini-3.1-flash-lite-preview"
 
-	// --- Step 3: Compress strategy ---
+	// --- Compress strategy + memory plugin ---
 	worker := memory.NewGenaiWorker(genaiClient)
 	strategy := memory.NewGenerational(memory.GenerationalConfig{}, worker, profile)
 
-	// --- Step 4: Memory plugin ---
 	memPlugin, err := memory.NewMemoryPlugin(genaiClient, strategy, profile, 0)
 	if err != nil {
-		return fmt.Errorf("failed to create memory plugin: %w", err)
+		return fmt.Errorf("creating memory plugin: %w", err)
 	}
-
-	// --- Step 5: Build ADK plugin ---
 	pl, err := memPlugin.BuildPlugin()
 	if err != nil {
-		return fmt.Errorf("failed to build ADK plugin: %w", err)
+		return fmt.Errorf("building ADK plugin: %w", err)
 	}
 
-	// --- Step 6: Gemini model ---
-	// gemini.NewModel requires a *genai.ClientConfig, not an existing *genai.Client.
-	// The genaiClient created above is used exclusively for the compress worker.
+	// --- LLM agent with shell tool ---
 	llmModel, err := gemini.NewModel(ctx, profile.ModelID, &genai.ClientConfig{APIKey: apiKey})
 	if err != nil {
-		return fmt.Errorf("failed to create Gemini model: %w", err)
+		return fmt.Errorf("creating Gemini model: %w", err)
 	}
 
-	// --- Step 6b: LLM agent ---
+	shellTool, err := functiontool.New(functiontool.Config{
+		Name:                "shell_exec",
+		Description:         "Execute a shell command and return stdout and exit code.",
+		RequireConfirmation: false,
+	}, shelltool.ToolHandlerFunc)
+	if err != nil {
+		return fmt.Errorf("creating shell tool: %w", err)
+	}
+
 	a, err := llmagent.New(llmagent.Config{
 		Name:        def.Name,
 		Model:       llmModel,
 		Instruction: def.Instruction,
-		Description: "Telegram Bot MVP — demo agent via Telegram.",
+		Description: "Telegram Bot — demo agent via Telegram.",
+		Tools:       []tool.Tool{shellTool},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create LLM agent: %w", err)
+		return fmt.Errorf("creating LLM agent: %w", err)
 	}
 
-	// --- Step 7: Session service and Runner ---
+	// --- Session service + Runner ---
 	sessionSvc := session.InMemoryService()
 	appName := "telegram_bot_app"
 
@@ -128,45 +134,32 @@ func runBot(ctx context.Context) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create runner: %w", err)
+		return fmt.Errorf("creating runner: %w", err)
 	}
 
-	// --- Step 8: Telegram bot setup ---
-	bot, err := tgbotapi.NewBotAPI(botToken)
-	if err != nil {
-		return fmt.Errorf("failed to create Telegram bot: %w", err)
-	}
-
-	slog.Info("telegram-bot: authorized", "username", bot.Self.UserName)
-
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	updates := bot.GetUpdatesChan(u)
-
-	slog.Info("telegram-bot: starting long polling loop")
-
-	// --- Long Polling loop ---
-	for update := range updates {
-		if update.Message == nil {
-			continue
+	// --- Telegram bot ---
+	handler := func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.Message == nil || update.Message.Text == "" {
+			return
 		}
 
-		// Each message gets a fresh session (MVP: no persistence across messages).
+		chatID := update.Message.Chat.ID
 		userID := strconv.FormatInt(update.Message.From.ID, 10)
+
+		// Each message gets a fresh session (MVP: no persistence).
 		sessResp, err := sessionSvc.Create(ctx, &session.CreateRequest{
 			AppName: appName,
 			UserID:  userID,
 		})
 		if err != nil {
 			slog.Error("telegram-bot: failed to create session", "error", err)
-			continue
+			return
 		}
-		sess := sessResp.Session
 
 		userMsg := genai.NewContentFromText(update.Message.Text, genai.RoleUser)
 		reply := ""
 
-		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, agent.RunConfig{}) {
+		for event, err := range r.Run(ctx, userID, sessResp.Session.ID(), userMsg, agent.RunConfig{}) {
 			if err != nil {
 				slog.Error("telegram-bot: agent error", "error", err)
 				continue
@@ -183,22 +176,29 @@ func runBot(ctx context.Context) error {
 			reply = "(no response)"
 		}
 
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, reply)
-		if _, err := bot.Send(msg); err != nil {
+		if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   reply,
+		}); err != nil {
 			slog.Error("telegram-bot: failed to send reply", "error", err)
 		}
 	}
 
+	b, err := bot.New(botToken, bot.WithDefaultHandler(handler))
+	if err != nil {
+		return fmt.Errorf("creating telegram bot: %w", err)
+	}
+
+	slog.Info("telegram-bot: starting long polling")
+	b.Start(ctx) // blocks until ctx is cancelled
 	return nil
 }
 
 func main() {
 	ctx := context.Background()
 
-	// Load .env file if present; ignore error when file does not exist.
 	_ = godotenv.Load()
 
-	// Fail fast if required tokens are missing.
 	if err := checkBotToken(); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
