@@ -26,6 +26,9 @@ import (
 
 	"github.com/neokn/agenticsystem/internal/agentdef"
 	"github.com/neokn/agenticsystem/internal/memory"
+	"github.com/neokn/agenticsystem/internal/shelltool"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/functiontool"
 )
 
 func run() error {
@@ -85,11 +88,22 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("creating Gemini model: %w", err)
 	}
+
+	shellTool, err := functiontool.New(functiontool.Config{
+		Name:                "shell_exec",
+		Description:         "Execute a shell command and return stdout and exit code.",
+		RequireConfirmation: false,
+	}, shelltool.ToolHandlerFunc)
+	if err != nil {
+		return fmt.Errorf("creating shell tool: %w", err)
+	}
+
 	a, err := llmagent.New(llmagent.Config{
 		Name:        def.Name,
 		Model:       llmModel,
 		Instruction: def.Instruction,
 		Description: "Demo agent with context memory management.",
+		Tools:       []tool.Tool{shellTool},
 	})
 	if err != nil {
 		return fmt.Errorf("creating LLM agent: %w", err)

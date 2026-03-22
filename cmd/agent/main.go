@@ -36,6 +36,9 @@ import (
 
 	"github.com/neokn/agenticsystem/internal/agentdef"
 	"github.com/neokn/agenticsystem/internal/memory"
+	"github.com/neokn/agenticsystem/internal/shelltool"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/functiontool"
 )
 
 // cliConfig holds parsed command-line flags.
@@ -190,12 +193,22 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 		return fmt.Errorf("failed to create Gemini model: %w", err)
 	}
 
-	// Step 7b: Create LLMAgent
+	// Step 7b: Create shell tool and LLMAgent
+	shellTool, err := functiontool.New(functiontool.Config{
+		Name:                "shell_exec",
+		Description:         "Execute a shell command and return stdout and exit code.",
+		RequireConfirmation: false,
+	}, shelltool.ToolHandlerFunc)
+	if err != nil {
+		return fmt.Errorf("failed to create shell tool: %w", err)
+	}
+
 	a, err := llmagent.New(llmagent.Config{
 		Name:        def.Name,
 		Model:       llmModel,
 		Instruction: def.Instruction,
 		Description: "Demo agent for end-to-end verification of context memory manager.",
+		Tools:       []tool.Tool{shellTool},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create LLM agent: %w", err)
