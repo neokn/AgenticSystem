@@ -4,47 +4,40 @@ depends-on: [30-s1-memory-layout]
 completed-by:
   backlog: jules
   refined: jensen
+  in-progress: james
 acceptance:
   # --- Happy path: AfterModelCallback stores usage ---
   - given: a model turn completes and resp.UsageMetadata.TotalTokenCount is available
     when: AfterModelCallback is invoked
     then: plugin.lastTotalTokens is set to resp.UsageMetadata.TotalTokenCount (verified by reading the field or via a subsequent estimation)
-
   # --- Happy path: first turn (no prior usage) ---
   - given: plugin.lastTotalTokens is 0 (first turn, no prior AfterModelCallback has run)
     when: BeforeModelCallback is invoked with a new user message
     then: estimated_total = 0 + tokenizer(msg) + max_output_tokens; if estimated_total < threshold the request passes through without calling countTokens API
-
   # --- Happy path: short conversation, well below threshold ---
   - given: last_total_tokens + tokenizer(new_msg) + max_output_tokens < 80% of context_window_tokens
     when: BeforeModelCallback is invoked
     then: the request passes through unmodified and countTokens API is never called
-
   # --- Happy path: offline estimate triggers API, API confirms, compression fires ---
   - given: last_total_tokens + tokenizer(new_msg) + max_output_tokens >= 80% of context_window_tokens
     when: countTokens API returns a precise_total also >= 80% of context_window_tokens
     then: CompressStrategy.SelectCandidates and Compress are called; req.Contents is rewritten to [system_prompt + summary + recent_active_turns + user_msg]; plugin.summaries and plugin.compressedUpToIndex are updated
-
   # --- Edge case: false alarm (offline over-estimates) ---
   - given: offline estimated_total >= 80% threshold triggers countTokens API call
     when: the precise_total returned by countTokens API is < 80% of context_window_tokens
     then: request passes through unmodified (no compression); countTokens API call count metric is incremented, compress_trigger_count is not
-
   # --- Edge case: AfterModelCallback with nil or missing UsageMetadata ---
   - given: a model response arrives with nil UsageMetadata or TotalTokenCount == 0
     when: AfterModelCallback is invoked
     then: lastTotalTokens retains its previous value (no overwrite with zero); a warning is logged
-
   # --- Edge case: concurrent safety ---
   - given: two goroutines invoke BeforeModelCallback simultaneously on the same MemoryPlugin instance
     when: both read lastTotalTokens and one updates compressedUpToIndex
     then: no data race is detected (go test -race passes); each callback observes a consistent snapshot of plugin state
-
   # --- Edge case: configurable threshold ---
   - given: MemoryPlugin is initialized with a custom threshold of 70%
     when: estimated_total reaches 70% of context_window_tokens
     then: the 70% threshold is used for both offline and precise-total comparisons; the 80% default is not applied
-
 architecture:
   component: internal/memory
   layer: Application Layer
@@ -166,6 +159,8 @@ history:
   - stage: refined
     at: 2026-03-22T14:00:00+08:00
     note: jensen architecture review complete
+  - stage: testing
+    at: "2026-03-22T12:00:00+08:00"
 description: |
   Implement the ADK MemoryPlugin in internal/memory/plugin.go. This is the central
   orchestrator for the context window memory manager. It has two responsibilities:
@@ -203,25 +198,25 @@ description: |
   File: internal/memory/plugin.go
 tasks:
   - text: "Define MemoryPlugin struct: fields client *genai.Client, layout MemoryLayout, strategy CompressStrategy, profile ModelProfile, threshold float64 (immutable deps); mu sync.Mutex, lastTotalTokens int, summaries []string, compressedUpToIndex int, metrics MemoryMetrics (mutable state — all under mu)"
-    done: false
+    done: true
   - text: "Implement plugin.Plugin interface registration (Name() and the two callback hooks)"
-    done: false
+    done: true
   - text: "Implement AfterModelCallback: lock mu, read resp.UsageMetadata.TotalTokenCount, update lastTotalTokens only if value > 0 (guard nil/zero), unlock"
-    done: false
+    done: true
   - text: "Implement offline estimator helper: estimatedTotal(msgTokens int) int — returns lastTotalTokens + msgTokens + profile.MaxOutputTokens"
-    done: false
+    done: true
   - text: "Implement BeforeModelCallback first layer: call genai/tokenizer.CountTokens(new_user_msg); if estimatedTotal < threshold*contextWindow, return nil (pass through)"
-    done: false
+    done: true
   - text: "Implement BeforeModelCallback second layer: call p.client.Models.CountTokens(ctx, p.profile.ModelID, req.Contents, nil); add profile.MaxOutputTokens to get preciseTotal; increment countTokensAPICallCount metric; if preciseTotal < threshold, return nil (false alarm path). NOTE: do NOT hold mu during this network call — snapshot lastTotalTokens under mu before the call, release mu, then call the API."
-    done: false
+    done: true
   - text: "Implement compression trigger: call strategy.SelectCandidates + strategy.Compress; rewrite req.Contents with [system_prompt + summary + active_turns + user_msg]; update summaries and compressedUpToIndex under mu; increment compressTriggerCount and record reclaimedTokens"
-    done: false
+    done: true
   - text: "Implement threshold configuration: accept threshold float64 in MemoryPlugin constructor; validate 0 < threshold < 1.0; default to 0.80"
-    done: false
+    done: true
   - text: "Implement MemoryMetrics struct (lastTotalTokens, usageRatio, countTokensAPICallCount, compressTriggerCount, compressReclaimedTokens []int) with an accessor method GetSnapshot() MemoryMetrics"
-    done: false
+    done: true
   - text: "Write unit tests (go test -race): first-turn (lastTotalTokens==0) estimation; short conversation never calls countTokens; offline over-threshold triggers API; false alarm pass-through; precise over-threshold fires compression and rewrites req.Contents; nil UsageMetadata guard; custom threshold respected"
-    done: false
+    done: true
 comments:
   - author: jules
     at: 2026-03-22T12:00:00+08:00
@@ -301,3 +296,33 @@ comments:
       Architecture layer CONFIRMED as Application Layer. No structural changes to card
       scope or split required. Labels backend + core-logic are correct.
       Card stays in refined/ — depends-on: [30-s1-memory-layout] must land first.
+  - author: james
+    at: "2026-03-22T12:00:00+08:00"
+    text: |-
+      Implementation complete.
+
+      Files created:
+        - internal/memory/plugin.go (433 lines)
+        - internal/memory/plugin_test.go (test suite, 25 tests)
+
+      Dependencies added:
+        - google.golang.org/genai/tokenizer@v1.51.0 (for offline local tokenizer)
+        - github.com/eliben/go-sentencepiece@v0.6.0 (transitive)
+
+      Patterns applied:
+        - Plugin (ADK plugin.Plugin callback-container, per architecture notes)
+        - Strategy (CompressStrategy injected via constructor, stateless)
+        - DI / Ports+Adapters: tokenCounter and apiTokenCounter interfaces isolate
+          network I/O from domain logic; newMemoryPluginWithDeps enables pure unit tests
+
+      Exception handling:
+        - Level 1 (propagate): countTokens API failure and compress failure are
+          returned as errors — ADK runner handles at the outer boundary
+        - Guard: nil/zero UsageMetadata logs warning and retains previous value
+
+      Locking discipline:
+        - Snapshot lastTotalTokens under mu, release before network I/O
+        - Re-acquire mu only when writing summaries/compressedUpToIndex/metrics
+
+      Test results: 25 new tests + 39 pre-existing = 64 total. All pass.
+      go test -race: PASS (no data races detected)

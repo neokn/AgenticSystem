@@ -153,3 +153,35 @@ zsh:1: no matches found: .kanban/in-progress/backend/30-s1-memory-layout[james].
 zsh:1: no matches found: .kanban/in-progress/backend/30-s1-memory-layout[james].yml
 zsh:1: no matches found: .kanban/in-progress/backend/30-s1-memory-layout[james].yml
 zsh:1: no matches found: .kanban/in-progress/backend/30-s1-memory-layout[james].yml
+zsh:1: no matches found: .kanban/testing/50-s4-compress-strategy[judge].yml
+zsh:1: no matches found: .kanban/testing/50-s4-compress-strategy[judge].yml
+zsh:1: no matches found: .kanban/testing/50-s4-compress-strategy[judge].yml
+zsh:1: no matches found: .kanban/testing/50-s4-compress-strategy[judge].yml
+[2026-03-22T11:56:29+08:00] → jobs: .kanban/review/50-s4-compress-strategy.yml (review)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jobs: No such file or directory
+zsh:1: no matches found: .kanban/testing/30-s1-memory-layout[judge].yml
+zsh:1: no matches found: .kanban/testing/30-s1-memory-layout[judge].yml
+zsh:1: no matches found: .kanban/testing/30-s1-memory-layout[judge].yml
+zsh:1: no matches found: .kanban/testing/30-s1-memory-layout[judge].yml
+[2026-03-22T11:56:52+08:00] → jobs: .kanban/review/30-s1-memory-layout.yml (review)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jobs: No such file or directory
+zsh:1: no matches found: .kanban/review/30-s1-memory-layout[jobs].yml
+zsh:1: no matches found: .kanban/review/30-s1-memory-layout[jobs].yml
+zsh:1: no matches found: .kanban/review/50-s4-compress-strategy[jobs].yml
+zsh:1: no matches found: .kanban/review/50-s4-compress-strategy[jobs].yml
+zsh:1: no matches found: .kanban/review/30-s1-memory-layout[jobs].yml
+zsh:1: no matches found: .kanban/review/30-s1-memory-layout[jobs].yml
+zsh:1: no matches found: .kanban/review/50-s4-compress-strategy[jobs].yml
+zsh:1: no matches found: .kanban/review/50-s4-compress-strategy[jobs].yml
+[2026-03-22T12:00:56+08:00] → jules: .kanban/backlog/80-dotprompt-integration.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+[2026-03-22T12:02:02+08:00] → judge: .kanban/testing/40-s2s3-memory-plugin.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
