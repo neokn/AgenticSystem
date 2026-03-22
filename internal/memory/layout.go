@@ -1,5 +1,13 @@
 package memory
 
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+)
+
 // LayoutConfig holds the ratio of context window tokens allocated to each
 // memory segment. All four ratios must be positive and must sum to exactly 1.0.
 // Load defaults from configs/default.json via DefaultLayoutConfig.
@@ -8,6 +16,37 @@ type LayoutConfig struct {
 	SummaryRatio float64 `json:"summary"`
 	ActiveRatio  float64 `json:"active"`
 	BufferRatio  float64 `json:"buffer"`
+}
+
+// defaultConfigJSON holds the path to the default config file relative to
+// this source file. We use runtime.Caller to locate the source tree so the
+// function works regardless of the working directory during tests.
+//
+// DefaultLayoutConfig reads the layout ratios from configs/default.json in the
+// project root (two directories above internal/memory/).
+func DefaultLayoutConfig() (LayoutConfig, error) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return LayoutConfig{}, fmt.Errorf("DefaultLayoutConfig: could not determine source file location")
+	}
+	// internal/memory/layout.go → ../../configs/default.json
+	configPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "configs", "default.json")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return LayoutConfig{}, fmt.Errorf("DefaultLayoutConfig: reading config file: %w", err)
+	}
+
+	var raw struct {
+		Memory struct {
+			Layout LayoutConfig `json:"layout"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return LayoutConfig{}, fmt.Errorf("DefaultLayoutConfig: parsing config file: %w", err)
+	}
+
+	return raw.Memory.Layout, nil
 }
 
 // MinSegmentTokens is the minimum number of tokens any non-BUFFER segment must

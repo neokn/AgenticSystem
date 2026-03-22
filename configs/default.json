@@ -2,6 +2,12 @@
   "memory": {
     "maxTokens": 0,
     "model": "",
-    "compressionStrategy": ""
+    "compressionStrategy": "",
+    "layout": {
+      "pinned": 0.15,
+      "summary": 0.25,
+      "active": 0.50,
+      "buffer": 0.10
+    }
   }
 }

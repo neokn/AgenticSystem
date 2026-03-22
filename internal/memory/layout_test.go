@@ -55,6 +55,46 @@ func TestLayoutConfig_should_hold_per_segment_ratios(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 3 — DefaultLayoutConfig loads from configs/default.json
+// ---------------------------------------------------------------------------
+
+func TestDefaultLayoutConfig_should_load_ratios_from_default_json(t *testing.T) {
+	// Act
+	cfg, err := DefaultLayoutConfig()
+
+	// Assert
+	if err != nil {
+		t.Fatalf("DefaultLayoutConfig() unexpected error: %v", err)
+	}
+	if cfg.PinnedRatio <= 0 {
+		t.Errorf("PinnedRatio = %v, want > 0", cfg.PinnedRatio)
+	}
+	if cfg.SummaryRatio <= 0 {
+		t.Errorf("SummaryRatio = %v, want > 0", cfg.SummaryRatio)
+	}
+	if cfg.ActiveRatio <= 0 {
+		t.Errorf("ActiveRatio = %v, want > 0", cfg.ActiveRatio)
+	}
+	if cfg.BufferRatio <= 0 {
+		t.Errorf("BufferRatio = %v, want > 0", cfg.BufferRatio)
+	}
+}
+
+func TestDefaultLayoutConfig_should_sum_to_exactly_one(t *testing.T) {
+	// Act
+	cfg, err := DefaultLayoutConfig()
+	if err != nil {
+		t.Fatalf("DefaultLayoutConfig() unexpected error: %v", err)
+	}
+
+	// Assert
+	sum := cfg.PinnedRatio + cfg.SummaryRatio + cfg.ActiveRatio + cfg.BufferRatio
+	if sum < 0.9999 || sum > 1.0001 {
+		t.Errorf("ratio sum = %v, want ~1.0", sum)
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}
