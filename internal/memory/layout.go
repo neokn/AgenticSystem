@@ -95,6 +95,27 @@ func NewLayout(profile ModelProfile, cfg LayoutConfig) (MemoryLayout, error) {
 	remainder := total - (pinned + summary + active + buffer)
 	active += remainder
 
+	// --- BUFFER auto-raise ---
+	// If the computed BUFFER is less than max_output_tokens, raise it.
+	// The deficit is deducted proportionally from PINNED, SUMMARY, and ACTIVE
+	// using the same floor+remainder pattern (remainder goes to ACTIVE).
+	if buffer < profile.MaxOutputTokens {
+		deficit := profile.MaxOutputTokens - buffer
+		buffer = profile.MaxOutputTokens
+
+		// Proportional weights among the three non-BUFFER segments.
+		otherTotal := pinned + summary + active
+		if otherTotal > 0 {
+			deductPinned  := int(float64(deficit) * float64(pinned)  / float64(otherTotal))
+			deductSummary := int(float64(deficit) * float64(summary) / float64(otherTotal))
+			deductActive  := deficit - deductPinned - deductSummary // floor+remainder
+
+			pinned  -= deductPinned
+			summary -= deductSummary
+			active  -= deductActive
+		}
+	}
+
 	return MemoryLayout{
 		pinned:  pinned,
 		summary: summary,

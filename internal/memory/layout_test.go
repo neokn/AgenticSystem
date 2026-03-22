@@ -245,6 +245,54 @@ func TestNewLayout_should_sum_exactly_to_context_window_with_prime_like_total(t 
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 6 — BUFFER auto-raise with proportional deduction (AC#2)
+// ---------------------------------------------------------------------------
+
+func TestNewLayout_should_raise_buffer_to_max_output_tokens_when_floor_is_less(t *testing.T) {
+	// Arrange: context=200,000, max_output=65,536
+	// floor(200,000 * 0.10) = 20,000 < 65,536 → auto-raise
+	profile := ModelProfile{
+		ContextWindowTokens: 200_000,
+		MaxOutputTokens:     65_536,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	// Act
+	layout, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("NewLayout() unexpected error: %v", err)
+	}
+
+	// BUFFER must equal max_output_tokens exactly
+	if layout.Buffer() != 65_536 {
+		t.Errorf("Buffer() = %d, want 65536 (raised to max_output_tokens)", layout.Buffer())
+	}
+
+	// Total must still equal context_window_tokens
+	if layout.Total() != 200_000 {
+		t.Errorf("Total() = %d, want 200000 (sum invariant)", layout.Total())
+	}
+
+	// All segments must be positive
+	if layout.Pinned() <= 0 {
+		t.Errorf("Pinned() = %d, must be > 0 after proportional deduction", layout.Pinned())
+	}
+	if layout.Summary() <= 0 {
+		t.Errorf("Summary() = %d, must be > 0 after proportional deduction", layout.Summary())
+	}
+	if layout.Active() <= 0 {
+		t.Errorf("Active() = %d, must be > 0 after proportional deduction", layout.Active())
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}
