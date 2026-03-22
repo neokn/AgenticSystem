@@ -4,8 +4,8 @@
 // incoming messages via Long Polling, translates each message into an ADK
 // runner.Run() call, and sends the reply back to the chat.
 //
-// Each message creates a fresh in-memory session — no persistence across
-// messages (MVP simplification, as noted in ADR-0005).
+// Each message creates a fresh JSONL-backed session stored under data/sessions/.
+// Sessions are persisted across process restarts (ADR-0007).
 //
 // Usage:
 //
@@ -35,6 +35,7 @@ import (
 
 	"github.com/neokn/agenticsystem/internal/agentdef"
 	"github.com/neokn/agenticsystem/internal/memory"
+	"github.com/neokn/agenticsystem/internal/sessionstore"
 	"github.com/neokn/agenticsystem/internal/shelltool"
 )
 
@@ -122,7 +123,7 @@ func runBot(ctx context.Context) error {
 	}
 
 	// --- Session service + Runner ---
-	sessionSvc := session.InMemoryService()
+	sessionSvc := sessionstore.NewJSONLService("data/sessions")
 	appName := "telegram_bot_app"
 
 	r, err := runner.New(runner.Config{
@@ -146,7 +147,8 @@ func runBot(ctx context.Context) error {
 		chatID := update.Message.Chat.ID
 		userID := strconv.FormatInt(update.Message.From.ID, 10)
 
-		// Each message gets a fresh session (MVP: no persistence).
+		// Each message gets a fresh JSONL-backed session (persistence via ADR-0007).
+		// Session reuse per chat ID is deferred to card 06.
 		sessResp, err := sessionSvc.Create(ctx, &session.CreateRequest{
 			AppName: appName,
 			UserID:  userID,
