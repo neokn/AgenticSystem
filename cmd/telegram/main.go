@@ -146,22 +146,32 @@ func runBot(ctx context.Context) error {
 
 		chatID := update.Message.Chat.ID
 		userID := strconv.FormatInt(update.Message.From.ID, 10)
+		sessionID := fmt.Sprintf("tg-%d", chatID) // one session per chat (user or group)
 
-		// Each message gets a fresh JSONL-backed session (persistence via ADR-0007).
-		// Session reuse per chat ID is deferred to card 06.
-		sessResp, err := sessionSvc.Create(ctx, &session.CreateRequest{
-			AppName: appName,
-			UserID:  userID,
+		// Get existing session or create a new one for this chat.
+		getResp, err := sessionSvc.Get(ctx, &session.GetRequest{
+			AppName:   appName,
+			UserID:    userID,
+			SessionID: sessionID,
 		})
 		if err != nil {
-			slog.Error("telegram-bot: failed to create session", "error", err)
-			return
+			// Session doesn't exist yet — create it.
+			_, err = sessionSvc.Create(ctx, &session.CreateRequest{
+				AppName:   appName,
+				UserID:    userID,
+				SessionID: sessionID,
+			})
+			if err != nil {
+				slog.Error("telegram-bot: failed to create session", "error", err)
+				return
+			}
 		}
+		_ = getResp // used only to check existence
 
 		userMsg := genai.NewContentFromText(update.Message.Text, genai.RoleUser)
 		reply := ""
 
-		for event, err := range r.Run(ctx, userID, sessResp.Session.ID(), userMsg, agent.RunConfig{}) {
+		for event, err := range r.Run(ctx, userID, sessionID, userMsg, agent.RunConfig{}) {
 			if err != nil {
 				slog.Error("telegram-bot: agent error", "error", err)
 				continue
