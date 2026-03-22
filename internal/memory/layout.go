@@ -116,6 +116,21 @@ func NewLayout(profile ModelProfile, cfg LayoutConfig) (MemoryLayout, error) {
 		}
 	}
 
+	// --- Minimum-capacity guard ---
+	// After BUFFER is set, each non-BUFFER segment must have at least
+	// MinSegmentTokens (= 1). If any segment falls below this floor, the
+	// context window is too small to accommodate max_output_tokens while
+	// reserving meaningful space for the other three segments.
+	const nonBufferSegments = 3
+	remaining := total - buffer
+	if remaining < nonBufferSegments*MinSegmentTokens {
+		return MemoryLayout{}, fmt.Errorf(
+			"NewLayout: BUFFER raised to max_output_tokens (%d), remaining capacity %d is "+
+				"insufficient for %d non-BUFFER segments (MinSegmentTokens = %d)",
+			profile.MaxOutputTokens, remaining, nonBufferSegments, MinSegmentTokens,
+		)
+	}
+
 	return MemoryLayout{
 		pinned:  pinned,
 		summary: summary,

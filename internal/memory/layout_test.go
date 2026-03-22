@@ -293,6 +293,66 @@ func TestNewLayout_should_raise_buffer_to_max_output_tokens_when_floor_is_less(t
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 7 — Minimum-capacity guard (AC#3 extremely small context window)
+// ---------------------------------------------------------------------------
+
+func TestNewLayout_should_error_when_remaining_capacity_after_buffer_raise_is_insufficient(t *testing.T) {
+	// Arrange: context=10,000, max_output=8,500
+	// floor(10,000 * 0.10) = 1,000 < 8,500 → raise buffer to 8,500
+	// remaining = 10,000 - 8,500 = 1,500 tokens for 3 segments
+	// 1,500 / 3 = 500 each — each >= MinSegmentTokens (1) → this should succeed
+	// To trigger error: context=5,000, max_output=4,998
+	// remaining = 5,000 - 4,998 = 2 tokens for 3 segments → error
+	profile := ModelProfile{
+		ContextWindowTokens: 5_000,
+		MaxOutputTokens:     4_998,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	// Act
+	_, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err == nil {
+		t.Fatal("NewLayout() expected error when remaining capacity is insufficient, got nil")
+	}
+}
+
+func TestNewLayout_should_succeed_when_remaining_capacity_is_just_enough(t *testing.T) {
+	// Arrange: context=10,000, max_output=8,500
+	// remaining = 1,500 — three segments get 500 each → all >= MinSegmentTokens
+	profile := ModelProfile{
+		ContextWindowTokens: 10_000,
+		MaxOutputTokens:     8_500,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	// Act
+	layout, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("NewLayout() unexpected error: %v", err)
+	}
+	if layout.Buffer() != 8_500 {
+		t.Errorf("Buffer() = %d, want 8500", layout.Buffer())
+	}
+	if layout.Total() != 10_000 {
+		t.Errorf("Total() = %d, want 10000", layout.Total())
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}
