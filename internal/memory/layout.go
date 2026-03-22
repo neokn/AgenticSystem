@@ -54,6 +54,38 @@ func DefaultLayoutConfig() (LayoutConfig, error) {
 // segment is left empty.
 const MinSegmentTokens = 1
 
+// ratioEpsilon is the tolerance for floating-point ratio sum comparisons.
+const ratioEpsilon = 1e-9
+
+// NewLayout constructs an immutable MemoryLayout from a ModelProfile and a
+// LayoutConfig. It validates all ratios, computes segment token limits using
+// floor arithmetic, auto-raises BUFFER to max_output_tokens when necessary,
+// and checks that every non-BUFFER segment receives at least MinSegmentTokens.
+//
+// Errors follow ADR-0001: plain fmt.Errorf with descriptive context.
+func NewLayout(profile ModelProfile, cfg LayoutConfig) (MemoryLayout, error) {
+	// --- Ratio validation ---
+	if cfg.PinnedRatio <= 0 {
+		return MemoryLayout{}, fmt.Errorf("NewLayout: all ratios must be > 0; PinnedRatio is %g", cfg.PinnedRatio)
+	}
+	if cfg.SummaryRatio <= 0 {
+		return MemoryLayout{}, fmt.Errorf("NewLayout: all ratios must be > 0; SummaryRatio is %g", cfg.SummaryRatio)
+	}
+	if cfg.ActiveRatio <= 0 {
+		return MemoryLayout{}, fmt.Errorf("NewLayout: all ratios must be > 0; ActiveRatio is %g", cfg.ActiveRatio)
+	}
+	if cfg.BufferRatio <= 0 {
+		return MemoryLayout{}, fmt.Errorf("NewLayout: all ratios must be > 0; BufferRatio is %g", cfg.BufferRatio)
+	}
+
+	sum := cfg.PinnedRatio + cfg.SummaryRatio + cfg.ActiveRatio + cfg.BufferRatio
+	if sum < 1.0-ratioEpsilon || sum > 1.0+ratioEpsilon {
+		return MemoryLayout{}, fmt.Errorf("NewLayout: ratio sum must equal 1.0, got %.10f", sum)
+	}
+
+	return MemoryLayout{}, nil // placeholder — Tasks 5–7 will complete this
+}
+
 // MemoryLayout is an immutable value object that partitions a model's context
 // window into four named segments: PINNED, SUMMARY, ACTIVE, and BUFFER.
 //

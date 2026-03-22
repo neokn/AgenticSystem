@@ -95,6 +95,76 @@ func TestDefaultLayoutConfig_should_sum_to_exactly_one(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 4 — NewLayout ratio validation
+// ---------------------------------------------------------------------------
+
+func TestNewLayout_should_error_when_ratio_sum_is_not_100_percent(t *testing.T) {
+	// Arrange: ratios sum to 1.05 (not 1.0)
+	profile := ModelProfile{
+		ContextWindowTokens: 1_048_576,
+		MaxOutputTokens:     8_192,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.20,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10, // sum = 1.05
+	}
+
+	// Act
+	_, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err == nil {
+		t.Fatal("NewLayout() expected error for ratio sum != 1.0, got nil")
+	}
+}
+
+func TestNewLayout_should_error_when_any_ratio_is_zero(t *testing.T) {
+	// Arrange: PINNED ratio is zero
+	profile := ModelProfile{
+		ContextWindowTokens: 1_048_576,
+		MaxOutputTokens:     8_192,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.00,
+		SummaryRatio: 0.35,
+		ActiveRatio:  0.55,
+		BufferRatio:  0.10, // sum = 1.0
+	}
+
+	// Act
+	_, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err == nil {
+		t.Fatal("NewLayout() expected error for zero ratio, got nil")
+	}
+}
+
+func TestNewLayout_should_error_when_any_ratio_is_negative(t *testing.T) {
+	// Arrange: SUMMARY ratio is negative
+	profile := ModelProfile{
+		ContextWindowTokens: 1_048_576,
+		MaxOutputTokens:     8_192,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.20,
+		SummaryRatio: -0.05,
+		ActiveRatio:  0.75,
+		BufferRatio:  0.10, // sum = 1.0
+	}
+
+	// Act
+	_, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err == nil {
+		t.Fatal("NewLayout() expected error for negative ratio, got nil")
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}
