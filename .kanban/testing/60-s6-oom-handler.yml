@@ -3,50 +3,37 @@ labels: [backend, core-logic]
 depends-on: [40-s2s3-memory-plugin, 50-s4-compress-strategy]
 completed-by:
   backlog: "jules"
+  in-progress: james
 acceptance:
   # --- Happy path ---
   - given: 正常壓縮後 precise_total 仍 >= 90% context window，且 SUMMARY segment 非空
     when: OOM handler 觸發
     then: >
-      對現有 SUMMARY 執行二次壓縮（summary of summary），
-      壓縮完成後重新計算 precise_total；
-      assert precise_total < 90% * context_window_tokens 且
-      req.Contents 已更新為包含新摘要的版本
+      對現有 SUMMARY 執行二次壓縮（summary of summary）， 壓縮完成後重新計算 precise_total； assert precise_total < 90% * context_window_tokens 且 req.Contents 已更新為包含新摘要的版本
 
   - given: 二次壓縮後 precise_total 仍 >= 90% context window
     when: OOM handler 繼續執行
     then: >
-      BeforeModelCallback 回傳 (*llm.LLMResponse, error)，
-      其中 LLMResponse.Content 包含型別為 OOMWarningEvent 的 custom event，
-      欄位包含 UsageRatio float64、Recommendation string（值為 "start a new conversation"）；
-      callback 不修改也不截斷 req.Contents
+      BeforeModelCallback 回傳 (*llm.LLMResponse, error)， 其中 LLMResponse.Content 包含型別為 OOMWarningEvent 的 custom event， 欄位包含 UsageRatio float64、Recommendation string（值為 "start a new conversation"）； callback 不修改也不截斷 req.Contents
 
   - given: 設定檔中 emergency_threshold_pct 設為 85（非預設 90）
     when: 正常壓縮後 precise_total 為 87% context window
     then: OOM handler 被觸發（使用自訂閾值而非預設值）
-
   # --- Edge cases / failure scenarios ---
   - given: SUMMARY segment 為空（對話尚未產生過任何摘要）
     when: OOM handler 觸發，嘗試對 SUMMARY 執行二次壓縮
     then: >
-      跳過二次壓縮步驟（無內容可壓），
-      直接進入 OOMWarning 路徑；
-      不得 panic，不得回傳 nil event
+      跳過二次壓縮步驟（無內容可壓）， 直接進入 OOMWarning 路徑； 不得 panic，不得回傳 nil event
 
   - given: 二次壓縮後 SUMMARY token 數與壓縮前相差 < 5%（壓縮已達極限）
     when: OOM handler 評估二次壓縮結果
     then: >
-      視為壓縮無效（maximally compressed），
-      立即跳至 OOMWarning，不再重試壓縮；
-      CompressResult.ActualCompressionRatio 被記錄至 metrics
+      視為壓縮無效（maximally compressed）， 立即跳至 OOMWarning，不再重試壓縮； CompressResult.ActualCompressionRatio 被記錄至 metrics
 
   - given: OOM handler 在任何步驟中遇到 CompressStrategy 回傳 error
     when: 二次壓縮執行失敗
     then: >
-      不靜默忽略 error；
-      回傳 OOMWarning event（附帶 error 訊息），
-      並在 metrics 中遞增 oom_event_count；
-      req.Contents 維持壓縮前狀態，不截斷
+      不靜默忽略 error； 回傳 OOMWarning event（附帶 error 訊息）， 並在 metrics 中遞增 oom_event_count； req.Contents 維持壓縮前狀態，不截斷
 
 architecture:
   component: internal/memory
@@ -75,6 +62,8 @@ history:
     at: 2026-03-22T12:00:00+08:00
   - stage: refined
     at: 2026-03-22T14:00:00+08:00
+  - stage: testing
+    at: "2026-03-22T18:00:00+08:00"
 description: |
   壓縮後仍不夠空間的最後手段。
 
@@ -93,17 +82,17 @@ description: |
   檔案：內嵌於 internal/memory/plugin.go 或獨立方法
 tasks:
   - text: 定義 OOMWarningEvent struct（UsageRatio, Recommendation, Reason 欄位）
-    done: false
+    done: true
   - text: 實作二次壓縮邏輯（summary of summary），含空 SUMMARY 及壓縮無效（<5% 縮減）的 guard
-    done: false
+    done: true
   - text: 實作 OOMWarning 回傳：BeforeModelCallback 回傳 non-nil LLMResponse，不截斷 req.Contents
-    done: false
+    done: true
   - text: Emergency threshold 90% 可配置（MemoryPluginConfig.EmergencyThresholdPct）
-    done: false
+    done: true
   - text: 確保所有程式碼路徑無靜默截斷，OOM 路徑遞增 oom_event_count metric
-    done: false
+    done: true
   - text: 寫測試：極小 context window 跑長對話觸發 OOM；SUMMARY 空時不 panic；壓縮失敗時仍回傳 OOMWarning
-    done: false
+    done: true
 comments:
   - author: jules
     at: 2026-03-22T14:00:00+08:00
@@ -127,3 +116,17 @@ comments:
       Story 規模評估：6 個 AC、6 個 task，所有內容集中在
       internal/memory/plugin.go 單一元件，不需拆分。
       直接移至 refined，Jensen 可決定是否需要架構 review。
+  - author: james
+    at: "2026-03-22T18:00:00+08:00"
+    text: |-
+      Implementation complete. Files created/modified:
+      - internal/memory/plugin.go — added OOMWarningEvent struct, emergencyThreshold field (default 90%), OOMEventCount metric, handleOOM() and returnOOMWarning() methods, post-primary-compression re-count logic, defaultEmergencyThreshold and minSecondaryCompressionReduction constants
+      - internal/memory/oom_test.go (new) — 8 OOM-specific tests covering all 6 acceptance criteria
+
+      Patterns applied:
+      - Chain of Responsibility (per architecture notes): handleOOM() tries secondary compression → skips if SUMMARY empty → skips if <5% reduction → falls back to OOMWarning
+      - Level 3 robustness (Behaviour Recovery): compress errors degrade gracefully to OOMWarning, never propagate as system errors
+
+      All 72 tests pass (go test -race ./internal/memory/...)
+      OOMWarning delivered via LLMResponse.CustomMetadata["oom_warning"] (non-nil response halts model call per ADK semantics)
+      Never silent truncation — req.Contents only modified when secondary compression is effective
