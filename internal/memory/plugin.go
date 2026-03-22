@@ -27,6 +27,12 @@ const defaultEmergencyThreshold = 0.90
 // and the OOM handler skips straight to OOMWarning.
 const minSecondaryCompressionReduction = 0.05
 
+// tokenizerFallbackModel is the model name used when the local tokenizer does
+// not recognize the requested model ID (e.g. preview models not yet in the SDK).
+// gemini-2.5-flash-lite maps to the gemma3 tokenizer, which is shared by all
+// Gemini 2.0+ models.
+const tokenizerFallbackModel = "gemini-2.5-flash-lite"
+
 // OOMWarningEvent is the structured payload returned via LLMResponse.CustomMetadata
 // when the OOM handler determines that the context window cannot be reclaimed.
 // The ADK runner sees a non-nil *model.LLMResponse and halts the model call.
@@ -143,9 +149,18 @@ func NewMemoryPlugin(
 	}
 	// Build the local tokenizer from the model ID. This downloads the tokenizer
 	// model on first use; subsequent calls are served from the in-process cache.
+	// If the model ID is not supported by the local tokenizer (e.g. preview models),
+	// fall back to "gemini-2.0-flash" which uses the same gemma3 tokenizer.
 	tok, err := tokenizer.NewLocalTokenizer(profile.ModelID)
 	if err != nil {
-		return nil, fmt.Errorf("NewMemoryPlugin: creating local tokenizer for %q: %w", profile.ModelID, err)
+		slog.Warn("local tokenizer not available for model, falling back to "+tokenizerFallbackModel+" tokenizer",
+			"modelID", profile.ModelID,
+			"error", err,
+		)
+		tok, err = tokenizer.NewLocalTokenizer(tokenizerFallbackModel)
+		if err != nil {
+			return nil, fmt.Errorf("NewMemoryPlugin: creating fallback local tokenizer: %w", err)
+		}
 	}
 	return newMemoryPluginWithDeps(tok, &genaiAPICounter{client: client}, layout, strategy, profile, threshold, 0)
 }

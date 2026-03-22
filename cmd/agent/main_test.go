@@ -15,15 +15,15 @@ import (
 // ---------------------------------------------------------------------------
 
 // should_return_error_when_gemini_api_key_is_not_set verifies that the demo
-// agent exits immediately with a descriptive error when GEMINI_API_KEY is not set.
-// Acceptance criterion: "GEMINI_API_KEY is not set" message must appear on stderr.
+// agent exits immediately with a descriptive error when GOOGLE_API_KEY is not set.
+// Acceptance criterion: "GOOGLE_API_KEY is not set" message must appear on stderr.
 func Test_should_return_error_when_gemini_api_key_is_not_set(t *testing.T) {
 	// Arrange
-	orig := os.Getenv("GEMINI_API_KEY")
-	os.Unsetenv("GEMINI_API_KEY")
+	orig := os.Getenv("GOOGLE_API_KEY")
+	os.Unsetenv("GOOGLE_API_KEY")
 	defer func() {
 		if orig != "" {
-			os.Setenv("GEMINI_API_KEY", orig)
+			os.Setenv("GOOGLE_API_KEY", orig)
 		}
 	}()
 
@@ -32,10 +32,10 @@ func Test_should_return_error_when_gemini_api_key_is_not_set(t *testing.T) {
 
 	// Assert
 	if err == nil {
-		t.Fatal("expected error when GEMINI_API_KEY is not set, got nil")
+		t.Fatal("expected error when GOOGLE_API_KEY is not set, got nil")
 	}
-	if !strings.Contains(err.Error(), "GEMINI_API_KEY is not set") {
-		t.Errorf("expected error message to contain %q, got %q", "GEMINI_API_KEY is not set", err.Error())
+	if !strings.Contains(err.Error(), "GOOGLE_API_KEY is not set") {
+		t.Errorf("expected error message to contain %q, got %q", "GOOGLE_API_KEY is not set", err.Error())
 	}
 }
 
@@ -43,15 +43,15 @@ func Test_should_return_error_when_gemini_api_key_is_not_set(t *testing.T) {
 // succeeds when the environment variable is present.
 func Test_should_not_return_error_when_gemini_api_key_is_set(t *testing.T) {
 	// Arrange
-	os.Setenv("GEMINI_API_KEY", "test-key")
-	defer os.Unsetenv("GEMINI_API_KEY")
+	os.Setenv("GOOGLE_API_KEY", "test-key")
+	defer os.Unsetenv("GOOGLE_API_KEY")
 
 	// Act
 	err := checkAPIKey()
 
 	// Assert
 	if err != nil {
-		t.Errorf("expected no error when GEMINI_API_KEY is set, got %v", err)
+		t.Errorf("expected no error when GOOGLE_API_KEY is set, got %v", err)
 	}
 }
 

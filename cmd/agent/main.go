@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/joho/godotenv"
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/agent"
@@ -49,11 +50,11 @@ type cliConfig struct {
 	metricsOut string
 }
 
-// checkAPIKey returns an error if GEMINI_API_KEY is not set in the environment.
+// checkAPIKey returns an error if GOOGLE_API_KEY is not set in the environment.
 // Acceptance criterion: process must fail-fast with a human-readable error.
 func checkAPIKey() error {
-	if os.Getenv("GEMINI_API_KEY") == "" {
-		return fmt.Errorf("GEMINI_API_KEY is not set")
+	if os.Getenv("GOOGLE_API_KEY") == "" {
+		return fmt.Errorf("GOOGLE_API_KEY is not set")
 	}
 	return nil
 }
@@ -137,7 +138,7 @@ func writeMetricsToFile(path, content string) error {
 //  9. On exit: print metrics report
 func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writer, errOutput io.Writer) error {
 	// Step 1: Create genai.Client
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := os.Getenv("GOOGLE_API_KEY")
 	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -145,15 +146,16 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 		return fmt.Errorf("failed to create genai.Client: %w", err)
 	}
 
-	// Step 2: ModelProfile for gemini-2.0-flash
+	// Step 2: ModelProfile for gemini-3-flash-preview (compress worker: gemini-3.1-flash-lite-preview)
 	reg, err := memory.NewRegistry()
 	if err != nil {
 		return fmt.Errorf("failed to create model registry: %w", err)
 	}
-	profile, err := reg.GetProfile("gemini-2.0-flash")
+	profile, err := reg.GetProfile("gemini-3-flash-preview")
 	if err != nil {
 		return fmt.Errorf("failed to get model profile: %w", err)
 	}
+	profile.CompressModelID = "gemini-3.1-flash-lite-preview"
 
 	// Step 3: MemoryLayout with default config
 	layoutCfg, err := memory.DefaultLayoutConfig()
@@ -322,6 +324,9 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 
 func main() {
 	ctx := context.Background()
+
+	// Load .env file if present; ignore error when file does not exist.
+	_ = godotenv.Load()
 
 	// Check API key first — fail fast.
 	if err := checkAPIKey(); err != nil {

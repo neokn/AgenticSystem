@@ -95,6 +95,18 @@ var builtinProfiles = []ModelProfile{
 		ContextWindowTokens: 1048576,
 		MaxOutputTokens:     65536,
 	},
+	{
+		ModelID:             "gemini-3-flash-preview",
+		Provider:            "google",
+		ContextWindowTokens: 1048576,
+		MaxOutputTokens:     65536,
+	},
+	{
+		ModelID:             "gemini-3.1-flash-lite-preview",
+		Provider:            "google",
+		ContextWindowTokens: 1048576,
+		MaxOutputTokens:     65536,
+	},
 }
 
 // GetEffectiveCompressModelID returns the model ID to use for the compress worker.
