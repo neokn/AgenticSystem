@@ -165,6 +165,86 @@ func TestNewLayout_should_error_when_any_ratio_is_negative(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 5 — Base segment calculation (AC#1 happy path, AC#4 rounding invariant)
+// ---------------------------------------------------------------------------
+
+func TestNewLayout_should_compute_floor_segments_and_assign_remainder_to_active(t *testing.T) {
+	// Arrange: gemini-2.0-flash, 15/25/50/10 ratios, 1,048,576 tokens
+	profile := ModelProfile{
+		ContextWindowTokens: 1_048_576,
+		MaxOutputTokens:     8_192,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	// Act
+	layout, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("NewLayout() unexpected error: %v", err)
+	}
+
+	// Each segment = floor(1_048_576 * ratio), remainder goes to active
+	// pinned  = floor(1_048_576 * 0.15) = 157_286
+	// summary = floor(1_048_576 * 0.25) = 262_144
+	// buffer  = floor(1_048_576 * 0.10) = 104_857  (>= max_output_tokens=8192 — no raise needed)
+	// active  = floor(1_048_576 * 0.50) = 524_288
+	// sum of floors = 157_286 + 262_144 + 524_288 + 104_857 = 1_048_575
+	// remainder = 1_048_576 - 1_048_575 = 1 → added to active
+	// active final = 524_288 + 1 = 524_289
+	wantPinned  := 157_286
+	wantSummary := 262_144
+	wantBuffer  := 104_857
+	wantActive  := 524_289
+
+	if layout.Pinned() != wantPinned {
+		t.Errorf("Pinned() = %d, want %d", layout.Pinned(), wantPinned)
+	}
+	if layout.Summary() != wantSummary {
+		t.Errorf("Summary() = %d, want %d", layout.Summary(), wantSummary)
+	}
+	if layout.Buffer() != wantBuffer {
+		t.Errorf("Buffer() = %d, want %d", layout.Buffer(), wantBuffer)
+	}
+	if layout.Active() != wantActive {
+		t.Errorf("Active() = %d, want %d", layout.Active(), wantActive)
+	}
+	if layout.Total() != profile.ContextWindowTokens {
+		t.Errorf("Total() = %d, want %d", layout.Total(), profile.ContextWindowTokens)
+	}
+}
+
+func TestNewLayout_should_sum_exactly_to_context_window_with_prime_like_total(t *testing.T) {
+	// Arrange: context=1000, max_output=50 — non-integer splits
+	profile := ModelProfile{
+		ContextWindowTokens: 1_000,
+		MaxOutputTokens:     50,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	// Act
+	layout, err := NewLayout(profile, cfg)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("NewLayout() unexpected error: %v", err)
+	}
+	if layout.Total() != 1_000 {
+		t.Errorf("Total() = %d, want 1000 (rounding invariant)", layout.Total())
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}

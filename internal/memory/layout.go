@@ -83,7 +83,24 @@ func NewLayout(profile ModelProfile, cfg LayoutConfig) (MemoryLayout, error) {
 		return MemoryLayout{}, fmt.Errorf("NewLayout: ratio sum must equal 1.0, got %.10f", sum)
 	}
 
-	return MemoryLayout{}, nil // placeholder — Tasks 5–7 will complete this
+	total := profile.ContextWindowTokens
+
+	// --- Base segment calculation: floor each segment ---
+	pinned  := int(float64(total) * cfg.PinnedRatio)
+	summary := int(float64(total) * cfg.SummaryRatio)
+	active  := int(float64(total) * cfg.ActiveRatio)
+	buffer  := int(float64(total) * cfg.BufferRatio)
+
+	// Assign rounding remainder to active so sum == total exactly.
+	remainder := total - (pinned + summary + active + buffer)
+	active += remainder
+
+	return MemoryLayout{
+		pinned:  pinned,
+		summary: summary,
+		active:  active,
+		buffer:  buffer,
+	}, nil
 }
 
 // MemoryLayout is an immutable value object that partitions a model's context
