@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -258,27 +259,25 @@ func TestOOMHandler_UsesCustomEmergencyThreshold_WhenConfigured(t *testing.T) {
 
 // AC4: When SUMMARY segment is empty, skip secondary compression and return OOMWarning.
 func TestOOMHandler_SkipsSecondaryCompression_WhenSummaryIsEmpty(t *testing.T) {
-	// Arrange: No existing summaries.
-	// After primary compression, precise_total still above 90%.
-	ac := &seqAPICounter{responses: []int32{920, 960}}
+	// Arrange: Call handleOOM directly with empty p.summaries so the empty-SUMMARY
+	// guard is exercised. Using runBeforeModel would populate p.summaries via primary
+	// compression before handleOOM fires, making the guard unreachable.
 	tc := &stubTokenCounter{count: 50}
-
+	ac := &stubAPICounter{count: 0} // no API calls expected in this path
 	strategy := &seqCompressStrategy{
-		results: []*CompressResult{
-			{CompressedText: "primary summary", OriginalTokens: 100, CompressedTokens: 80},
-		},
+		results: []*CompressResult{}, // no compress calls expected
 	}
 
 	p := newOOMTestPlugin(t, tc, ac, strategy, 0.80, 0.90)
-	// Leave p.summaries empty — the empty SUMMARY case.
-	p.mu.Lock()
-	p.lastTotalTokens = 800
-	p.mu.Unlock()
+	// Explicitly leave p.summaries empty — this is the scenario under test.
 
 	req := makeMultiTurnRequest()
 
-	// Act — must not panic.
-	result, err := p.runBeforeModel(context.Background(), req)
+	// preciseTotalBeforeSecondary = 940 (above 90% of 1000-token window = 900)
+	preciseTotalAboveThreshold := 940
+
+	// Act — call handleOOM directly; must not panic.
+	result, err := p.handleOOM(context.Background(), req, preciseTotalAboveThreshold)
 
 	// Assert
 	if err != nil {
@@ -293,6 +292,11 @@ func TestOOMHandler_SkipsSecondaryCompression_WhenSummaryIsEmpty(t *testing.T) {
 	}
 	if event.Recommendation != "start a new conversation" {
 		t.Errorf("expected Recommendation='start a new conversation', got %q", event.Recommendation)
+	}
+	// Verify the correct code path was taken — Reason must mention empty SUMMARY.
+	const wantReasonSubstr = "SUMMARY segment empty"
+	if !strings.Contains(event.Reason, wantReasonSubstr) {
+		t.Errorf("expected event.Reason to contain %q (empty-SUMMARY guard), got %q", wantReasonSubstr, event.Reason)
 	}
 }
 

@@ -4,6 +4,7 @@ depends-on: [40-s2s3-memory-plugin, 50-s4-compress-strategy]
 completed-by:
   backlog: "jules"
   in-progress: james
+  testing: judge
 acceptance:
   # --- Happy path ---
   - given: 正常壓縮後 precise_total 仍 >= 90% context window，且 SUMMARY segment 非空
@@ -64,6 +65,10 @@ history:
     at: 2026-03-22T14:00:00+08:00
   - stage: testing
     at: "2026-03-22T18:00:00+08:00"
+  - stage: in-progress/backend
+    at: "2026-03-22T12:15:00+08:00"
+  - stage: testing
+    at: "2026-03-22T12:30:00+08:00"
 description: |
   壓縮後仍不夠空間的最後手段。
 
@@ -130,3 +135,49 @@ comments:
       All 72 tests pass (go test -race ./internal/memory/...)
       OOMWarning delivered via LLMResponse.CustomMetadata["oom_warning"] (non-nil response halts model call per ADK semantics)
       Never silent truncation — req.Contents only modified when secondary compression is effective
+  - author: judge
+    at: "2026-03-22T12:15:00+08:00"
+    text: |-
+      ## Test Verification Report
+
+      **Verdict:** FAIL
+
+      ### Acceptance Criteria Coverage
+      - [x] AC1: Secondary compression succeeds, precise_total drops below 90%, req.Contents updated — covered by TestOOMHandler_TriggersSecondaryCompression_WhenAboveEmergencyThreshold
+      - [x] AC2: OOMWarning returned as non-nil *model.LLMResponse (halts model call), not as Go error — covered by TestOOMHandler_ReturnsOOMWarning_WhenSecondaryCompressionInsufficientAfterPrimary
+      - [x] AC3: Emergency threshold is configurable — covered by TestOOMHandler_UsesCustomEmergencyThreshold_WhenConfigured and TestOOMPlugin_DefaultEmergencyThreshold_Is90Percent
+      - [~] AC4: SUMMARY is empty → skip compression, go directly to OOMWarning — TestOOMHandler_SkipsSecondaryCompression_WhenSummaryIsEmpty PASSES but tests the WRONG code path. Primary compression runs first and populates p.summaries before handleOOM is called, so the empty-SUMMARY guard in handleOOM is never reached. The test asserts the outcome (OOMWarning returned) but never exercises the intended branch. Does not assert event.Reason.
+      - [x] AC5: Secondary compression < 5% reduction → OOMWarning — covered by TestOOMHandler_ReturnsOOMWarning_WhenSecondaryCompressionBelowMinReduction
+      - [x] AC6: Compress error during secondary → OOMWarning + increment oom_event_count — covered by TestOOMHandler_ReturnsOOMWarning_WhenSecondaryCompressionFails
+
+      ### Test Quality
+      - AAA structure: OK — all tests follow Arrange/Act/Assert
+      - Naming: OK — descriptive scenario+expected-result names
+      - Pyramid: OK — all unit tests, fast and isolated
+      - Edge cases: OK for AC5, AC6. AC4 edge case has a gap (see above)
+
+      ### Test Results
+      - Total (memory package): 72 tests
+      - Passed: 71
+      - Failed: 1
+
+      ### Issues Found
+
+      1. BLOCKING FAILURE: TestBeforeModelCallback_ReclaimedTokensRecorded_WhenCompressionFires (plugin_test.go:506) FAILS.
+         Root cause: makeRequest("msg") produces a single-element Contents slice. The card 40 fix changed triggerCompression to use req.Contents[:len(req.Contents)-1] (excluding the new user message). With a single message, this yields an empty slice, so SelectCandidates receives no turns, returns empty candidates, and compression is skipped. Result: CompressReclaimedTokens remains empty, assertion fails.
+         Fix needed: Update the test to use makeMultiTurnRequest() or a request with at least 2 contents so compression candidates exist.
+
+      2. AC4 TEST PATH ISSUE: TestOOMHandler_SkipsSecondaryCompression_WhenSummaryIsEmpty does not exercise the empty-SUMMARY guard in handleOOM. Primary compression adds a summary before handleOOM fires, so existingSummary is never empty in the test. The test should either: (a) call handleOOM directly with empty summaries, or (b) set up the scenario to bypass primary compression. Consider adding a Reason assertion: event.Reason should contain "SUMMARY segment empty".
+
+      3. go vet ./... passes clean.
+      4. No silent truncation found — all Contents mutations go through buildCompressedContents or OOMWarning.
+  - author: james
+    at: "2026-03-22T12:30:00+08:00"
+    text: |-
+      Fixed 2 issues found by judge:
+
+      1. Issue 1 — verified TestBeforeModelCallback_ReclaimedTokensRecorded_WhenCompressionFires already uses 3-element Contents; all tests pass.
+
+      2. Issue 2 (AC4 false green) — rewrote TestOOMHandler_SkipsSecondaryCompression_WhenSummaryIsEmpty to call handleOOM directly with empty p.summaries. Added strings.Contains assertion on event.Reason verifying the SUMMARY segment empty code path is taken. Added strings import to oom_test.go.
+
+      All 72 tests pass (go test -race -count=1 ./internal/memory/).
