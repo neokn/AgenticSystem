@@ -27,6 +27,34 @@ func TestMemoryLayout_should_return_segment_values_via_accessors(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 2 — LayoutConfig struct
+// ---------------------------------------------------------------------------
+
+func TestLayoutConfig_should_hold_per_segment_ratios(t *testing.T) {
+	// Arrange + Act
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	// Assert: fields accessible and hold correct values
+	if cfg.PinnedRatio != 0.15 {
+		t.Errorf("PinnedRatio = %v, want 0.15", cfg.PinnedRatio)
+	}
+	if cfg.SummaryRatio != 0.25 {
+		t.Errorf("SummaryRatio = %v, want 0.25", cfg.SummaryRatio)
+	}
+	if cfg.ActiveRatio != 0.50 {
+		t.Errorf("ActiveRatio = %v, want 0.50", cfg.ActiveRatio)
+	}
+	if cfg.BufferRatio != 0.10 {
+		t.Errorf("BufferRatio = %v, want 0.10", cfg.BufferRatio)
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}

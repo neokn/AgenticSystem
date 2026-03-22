@@ -1,5 +1,15 @@
 package memory
 
+// LayoutConfig holds the ratio of context window tokens allocated to each
+// memory segment. All four ratios must be positive and must sum to exactly 1.0.
+// Load defaults from configs/default.json via DefaultLayoutConfig.
+type LayoutConfig struct {
+	PinnedRatio  float64 `json:"pinned"`
+	SummaryRatio float64 `json:"summary"`
+	ActiveRatio  float64 `json:"active"`
+	BufferRatio  float64 `json:"buffer"`
+}
+
 // MinSegmentTokens is the minimum number of tokens any non-BUFFER segment must
 // receive after BUFFER is raised to max_output_tokens. A value of 1 ensures no
 // segment is left empty.
