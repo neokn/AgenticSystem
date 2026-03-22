@@ -17,6 +17,34 @@ import (
 // triggers compression. Corresponds to 80% of the context window.
 const defaultThreshold = 0.80
 
+// defaultEmergencyThreshold is the fraction of context_window_tokens at which the
+// OOM handler fires (after primary compression). Corresponds to 90%.
+const defaultEmergencyThreshold = 0.90
+
+// minSecondaryCompressionReduction is the minimum fractional token reduction
+// required from secondary compression to be considered effective.
+// Below this threshold (< 5%), the text is treated as maximally compressed
+// and the OOM handler skips straight to OOMWarning.
+const minSecondaryCompressionReduction = 0.05
+
+// OOMWarningEvent is the structured payload returned via LLMResponse.CustomMetadata
+// when the OOM handler determines that the context window cannot be reclaimed.
+// The ADK runner sees a non-nil *model.LLMResponse and halts the model call.
+// This follows Level 3 robustness: graceful degradation rather than hard failure.
+type OOMWarningEvent struct {
+	// UsageRatio is precise_total / context_window_tokens at the time OOM fired.
+	UsageRatio float64
+
+	// Recommendation is a human-readable suggestion for the user.
+	// Always "start a new conversation".
+	Recommendation string
+
+	// Reason is a human-readable explanation of why OOM was triggered.
+	// E.g. "secondary compression ineffective", "SUMMARY segment empty",
+	// "secondary compression error: <msg>".
+	Reason string
+}
+
 // tokenCounter is the interface for offline (local) token counting.
 // It is satisfied by *tokenizer.LocalTokenizer and by test stubs.
 type tokenCounter interface {
@@ -62,6 +90,11 @@ type MemoryMetrics struct {
 	// CompressReclaimedTokens records the tokens reclaimed per compression cycle
 	// (OriginalTokens - CompressedTokens). One entry per cycle.
 	CompressReclaimedTokens []int
+
+	// OOMEventCount counts how many times the OOM handler returned an OOMWarning.
+	// Each increment represents a conversation that could not be reclaimed by
+	// compression and required the user to start a new conversation.
+	OOMEventCount int
 }
 
 // MemoryPlugin is the ADK plugin that tracks token usage and triggers compression
@@ -76,12 +109,13 @@ type MemoryMetrics struct {
 // All mutable fields are protected by mu; do NOT hold mu during network calls.
 type MemoryPlugin struct {
 	// Immutable after construction.
-	tc        tokenCounter
-	ac        apiTokenCounter
-	layout    MemoryLayout
-	strategy  CompressStrategy
-	profile   ModelProfile
-	threshold float64
+	tc                 tokenCounter
+	ac                 apiTokenCounter
+	layout             MemoryLayout
+	strategy           CompressStrategy
+	profile            ModelProfile
+	threshold          float64
+	emergencyThreshold float64 // OOM handler fires when precise_total >= this fraction of context window
 
 	// Mutable state — all reads and writes under mu.
 	mu                  sync.Mutex
@@ -137,12 +171,13 @@ func newMemoryPluginWithDeps(
 		return nil, fmt.Errorf("NewMemoryPlugin: strategy must not be nil")
 	}
 	return &MemoryPlugin{
-		tc:        tc,
-		ac:        ac,
-		layout:    layout,
-		strategy:  strategy,
-		profile:   profile,
-		threshold: threshold,
+		tc:                 tc,
+		ac:                 ac,
+		layout:             layout,
+		strategy:           strategy,
+		profile:            profile,
+		threshold:          threshold,
+		emergencyThreshold: defaultEmergencyThreshold,
 	}, nil
 }
 
@@ -288,7 +323,32 @@ func (p *MemoryPlugin) runBeforeModel(ctx context.Context, req *model.LLMRequest
 	}
 
 	// --- Compression trigger ---
-	return p.triggerCompression(ctx, req)
+	if _, err := p.triggerCompression(ctx, req); err != nil {
+		return nil, err
+	}
+
+	// --- OOM handler (post-primary-compression) ---
+	// Re-count precisely after primary compression to see if we are still
+	// above the emergency threshold. Only call API if primary compression ran.
+	postCompressTotal, err := p.ac.CountTokensAPI(ctx, p.profile.ModelID, req.Contents)
+	if err != nil {
+		// Propagate — API failure is a system error, not an OOM condition.
+		return nil, fmt.Errorf("memory_plugin: post-compression countTokens API: %w", err)
+	}
+	p.mu.Lock()
+	p.metrics.CountTokensAPICallCount++
+	p.mu.Unlock()
+
+	postPreciseTotal := int(postCompressTotal) + p.profile.MaxOutputTokens
+	emergencyTokens := int(p.emergencyThreshold * float64(p.profile.ContextWindowTokens))
+
+	if postPreciseTotal < emergencyTokens {
+		// Primary compression was sufficient — no OOM condition.
+		return nil, nil
+	}
+
+	// Primary compression was not enough → invoke OOM handler.
+	return p.handleOOM(ctx, req, postPreciseTotal)
 }
 
 // triggerCompression calls the CompressStrategy to select candidates and compress
@@ -339,6 +399,129 @@ func (p *MemoryPlugin) triggerCompression(ctx context.Context, req *model.LLMReq
 	)
 
 	return nil, nil
+}
+
+// handleOOM implements the OOM handler: Chain of Responsibility.
+// It tries secondary compression (summary of summary), then falls back to
+// returning an OOMWarning as a non-nil *model.LLMResponse.
+//
+// Contract (per ADR and ADK callback semantics):
+//   - Returns non-nil *model.LLMResponse when OOMWarning is issued.
+//   - Returns nil, nil when secondary compression succeeds.
+//   - Never truncates req.Contents.
+//   - Never propagates a compress error as a Go error — falls back to OOMWarning.
+func (p *MemoryPlugin) handleOOM(ctx context.Context, req *model.LLMRequest, preciseTotalBeforeSecondary int) (*model.LLMResponse, error) {
+	emergencyTokens := int(p.emergencyThreshold * float64(p.profile.ContextWindowTokens))
+
+	// --- Step 1: Check whether SUMMARY segment is non-empty ---
+	p.mu.Lock()
+	var existingSummary string
+	if len(p.summaries) > 0 {
+		existingSummary = p.summaries[len(p.summaries)-1]
+	}
+	p.mu.Unlock()
+
+	if existingSummary == "" {
+		// No SUMMARY to re-compress — skip directly to OOMWarning.
+		slog.Warn("memory_plugin: OOM handler: SUMMARY segment is empty, skipping secondary compression",
+			"precise_total", preciseTotalBeforeSecondary,
+			"emergency_tokens", emergencyTokens,
+		)
+		return p.returnOOMWarning(preciseTotalBeforeSecondary, "SUMMARY segment empty, no content to re-compress")
+	}
+
+	// --- Step 2: Attempt secondary compression (summary of summary) ---
+	// Use the existing summary as the single candidate to re-compress.
+	summaryTurn := []ConversationTurn{{Role: "model", Content: existingSummary}}
+	secondaryResult, err := p.strategy.Compress(ctx, summaryTurn, "", p.profile)
+	if err != nil {
+		// Level 3 robustness: compress error → graceful degradation to OOMWarning.
+		// Do NOT propagate — this is a component fault, not a system error.
+		slog.Error("memory_plugin: OOM handler: secondary compression failed, falling back to OOMWarning",
+			"error", err,
+			"precise_total", preciseTotalBeforeSecondary,
+		)
+		reason := fmt.Sprintf("secondary compression error: %v", err)
+		return p.returnOOMWarning(preciseTotalBeforeSecondary, reason)
+	}
+
+	// --- Step 3: Check minimum reduction threshold (< 5% = maximally compressed) ---
+	var reductionRatio float64
+	if secondaryResult.OriginalTokens > 0 {
+		reductionRatio = 1.0 - (float64(secondaryResult.CompressedTokens) / float64(secondaryResult.OriginalTokens))
+	}
+
+	if reductionRatio < minSecondaryCompressionReduction {
+		// Secondary compression is ineffective — already at the limit.
+		slog.Warn("memory_plugin: OOM handler: secondary compression ineffective (< 5% reduction), skipping to OOMWarning",
+			"reduction_ratio", reductionRatio,
+			"actual_compression_ratio", secondaryResult.ActualCompressionRatio,
+		)
+		return p.returnOOMWarning(preciseTotalBeforeSecondary, "secondary compression ineffective: already maximally compressed")
+	}
+
+	// --- Step 4: Apply secondary compression — rewrite req.Contents ---
+	req.Contents = buildCompressedContents(req, secondaryResult.CompressedText, len(req.Contents)-1)
+
+	// Update plugin state under mu.
+	reclaimedTokens := secondaryResult.OriginalTokens - secondaryResult.CompressedTokens
+	p.mu.Lock()
+	p.summaries = append(p.summaries, secondaryResult.CompressedText)
+	p.metrics.CompressTriggerCount++
+	p.metrics.CompressReclaimedTokens = append(p.metrics.CompressReclaimedTokens, reclaimedTokens)
+	p.mu.Unlock()
+
+	// --- Step 5: Re-count after secondary compression ---
+	postSecondaryTotal, err := p.ac.CountTokensAPI(ctx, p.profile.ModelID, req.Contents)
+	if err != nil {
+		return nil, fmt.Errorf("memory_plugin: post-secondary-compression countTokens API: %w", err)
+	}
+	p.mu.Lock()
+	p.metrics.CountTokensAPICallCount++
+	p.mu.Unlock()
+
+	postSecondaryPrecise := int(postSecondaryTotal) + p.profile.MaxOutputTokens
+
+	if postSecondaryPrecise < emergencyTokens {
+		// Secondary compression succeeded — context window is now safe.
+		slog.Info("memory_plugin: OOM handler: secondary compression succeeded",
+			"post_secondary_precise", postSecondaryPrecise,
+			"emergency_tokens", emergencyTokens,
+			"reclaimed_tokens", reclaimedTokens,
+		)
+		return nil, nil
+	}
+
+	// Still above emergency threshold after secondary compression → OOMWarning.
+	return p.returnOOMWarning(postSecondaryPrecise, "secondary compression insufficient: context window still full")
+}
+
+// returnOOMWarning constructs and returns a non-nil *model.LLMResponse with an
+// OOMWarningEvent in CustomMetadata. It also increments the oom_event_count metric.
+// This halts the model call per ADK BeforeModelCallback semantics.
+func (p *MemoryPlugin) returnOOMWarning(preciseTotal int, reason string) (*model.LLMResponse, error) {
+	usageRatio := float64(preciseTotal) / float64(p.profile.ContextWindowTokens)
+
+	event := OOMWarningEvent{
+		UsageRatio:     usageRatio,
+		Recommendation: "start a new conversation",
+		Reason:         reason,
+	}
+
+	p.mu.Lock()
+	p.metrics.OOMEventCount++
+	p.mu.Unlock()
+
+	slog.Warn("memory_plugin: OOM handler: returning OOMWarning",
+		"usage_ratio", usageRatio,
+		"reason", reason,
+	)
+
+	return &model.LLMResponse{
+		CustomMetadata: map[string]any{
+			"oom_warning": event,
+		},
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
