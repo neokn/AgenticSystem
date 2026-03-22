@@ -128,18 +128,11 @@ func (s *jsonlService) Create(ctx context.Context, req *session.CreateRequest) (
 	}
 	f.Close()
 
-	// Initialise state from CreateRequest.State, excluding temp keys.
-	initialState := make(map[string]any)
-	if req.State != nil {
-		_, _, sessionDelta := extractStateDeltas(req.State)
-		maps.Copy(initialState, sessionDelta)
-	}
-
 	sess := &jsonlSession{
 		appName:   req.AppName,
 		userID:    req.UserID,
 		sessionID: sessionID,
-		state:     initialState,
+		state:     make(map[string]any),
 		updatedAt: now,
 	}
 
@@ -193,10 +186,8 @@ func (s *jsonlService) Get(ctx context.Context, req *session.GetRequest) (*sessi
 	return &session.GetResponse{Session: sess}, nil
 }
 
-// replayJSONL reads all compact records from the JSONL file for sessionID
-// and reconstructs session.Event values. Corrupt lines are skipped with a
-// slog.Warn. The function is backward-compatible: old full-format lines are
-// parsed correctly because json.Unmarshal ignores unknown fields.
+// replayJSONL reads all events from the JSONL file for sessionID and
+// deserializes them as-is. Corrupt lines are skipped with a slog.Warn.
 func (s *jsonlService) replayJSONL(sessionID string) ([]*session.Event, error) {
 	f, err := os.Open(s.jsonlPath(sessionID))
 	if err != nil {
@@ -208,7 +199,6 @@ func (s *jsonlService) replayJSONL(sessionID string) ([]*session.Event, error) {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	// Allow large lines for events with base64 blobs etc.
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
 	var events []*session.Event
@@ -220,8 +210,8 @@ func (s *jsonlService) replayJSONL(sessionID string) ([]*session.Event, error) {
 			continue
 		}
 
-		var content genai.Content
-		if err := json.Unmarshal(line, &content); err != nil {
+		var ev session.Event
+		if err := json.Unmarshal(line, &ev); err != nil {
 			slog.Warn("sessionstore: skipping corrupt JSONL line",
 				"session_id", sessionID,
 				"line", lineNum,
@@ -229,13 +219,7 @@ func (s *jsonlService) replayJSONL(sessionID string) ([]*session.Event, error) {
 			)
 			continue
 		}
-		if len(content.Parts) == 0 {
-			continue
-		}
 
-		ev := session.Event{}
-		ev.Content = &content
-		ev.ID = uuid.NewString()
 		events = append(events, &ev)
 	}
 	if err := scanner.Err(); err != nil {
@@ -331,7 +315,17 @@ func (s *jsonlService) AppendEvent(ctx context.Context, curSession session.Sessi
 		return nil
 	}
 
-	line, err := json.Marshal(stripThoughtSignatures(event.Content))
+	// Update the in-memory session so the runner sees new events immediately.
+	if sess, ok := curSession.(*jsonlSession); ok {
+		sess.mu.Lock()
+		sess.events = append(sess.events, event)
+		sess.updatedAt = event.Timestamp
+		sess.mu.Unlock()
+	}
+
+	stored := *event
+	stored.Content = stripThoughtSignatures(event.Content)
+	line, err := json.Marshal(&stored)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
@@ -449,34 +443,6 @@ func (s *jsonlState) All() iter.Seq2[string, any] {
 			}
 		}
 	}
-}
-
-// ---- State delta helpers (mirrors google.golang.org/adk/internal/sessionutils) ----
-//
-// These re-implement the internal sessionutils functions because the ADK
-// sessionutils package is internal to the ADK module and cannot be imported.
-
-const (
-	appPrefix  = "app:"
-	userPrefix = "user:"
-)
-
-// extractStateDeltas splits a state delta map into (appDelta, userDelta, sessionDelta).
-// temp: keys are dropped. app: and user: prefixes are stripped from the output keys.
-func extractStateDeltas(delta map[string]any) (appDelta, userDelta, sessionDelta map[string]any) {
-	appDelta = make(map[string]any)
-	userDelta = make(map[string]any)
-	sessionDelta = make(map[string]any)
-	for k, v := range delta {
-		if clean, ok := strings.CutPrefix(k, appPrefix); ok {
-			appDelta[clean] = v
-		} else if clean, ok := strings.CutPrefix(k, userPrefix); ok {
-			userDelta[clean] = v
-		} else if !strings.HasPrefix(k, session.KeyPrefixTemp) {
-			sessionDelta[k] = v
-		}
-	}
-	return
 }
 
 

@@ -393,35 +393,44 @@ func TestGet_should_apply_num_recent_events_filter(t *testing.T) {
 	}
 }
 
-func TestAppendEvent_should_only_persist_content(t *testing.T) {
+func TestAppendEvent_should_store_full_event_but_replay_only_content(t *testing.T) {
 	dir := newTempDir(t)
 	svc := sessionstore.NewJSONLService(dir)
 	sess := createSession(t, svc, "myapp", "user1", "sess1")
 
 	ev := makeTextEvent("agent", "hello world")
-	ev.Actions.StateDelta = map[string]any{"key": "should not be persisted"}
 
 	if err := svc.AppendEvent(context.Background(), sess, ev); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
 
-	// Read raw JSONL and verify only Content is present.
+	// Raw JSONL should contain the full event (Author, Content, etc.).
 	raw, err := os.ReadFile(filepath.Join(dir, "sess1.jsonl"))
 	if err != nil {
 		t.Fatalf("read jsonl: %v", err)
 	}
 	line := strings.TrimSpace(string(raw))
-	if strings.Contains(line, "StateDelta") {
-		t.Error("JSONL should not contain StateDelta")
+	if !strings.Contains(line, `"Content"`) {
+		t.Error("JSONL should contain Content field")
 	}
-	if strings.Contains(line, "Author") {
-		t.Error("JSONL should not contain Author")
+	if !strings.Contains(line, `"Author"`) {
+		t.Error("JSONL should contain Author field (full event)")
 	}
-	if strings.Contains(line, `"Content":{`) {
-		t.Error("JSONL should not have Content wrapper — store genai.Content directly")
+
+	// But replay should only reconstruct Content (role + parts).
+	svc2 := sessionstore.NewJSONLService(dir)
+	resp, err := svc2.Get(context.Background(), &session.GetRequest{
+		AppName: "myapp", UserID: "user1", SessionID: "sess1",
+	})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
-	if !strings.Contains(line, "hello world") {
-		t.Error("JSONL should contain Content text")
+	replayed := resp.Session.Events().At(0)
+	if replayed.Content == nil || replayed.Content.Parts[0].Text != "hello world" {
+		t.Errorf("replayed Content mismatch: %v", replayed.Content)
+	}
+	if replayed.Author != "agent" {
+		t.Errorf("replayed Author should be 'agent', got %q", replayed.Author)
 	}
 }
 

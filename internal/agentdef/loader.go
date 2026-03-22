@@ -17,7 +17,7 @@ type Definition struct {
 	// Name is the agent directory name (e.g. "demo_agent").
 	Name string
 
-	// Instruction is the prompt body text (below the frontmatter).
+	// Instruction is the system instruction extracted from the rendered prompt.
 	Instruction string
 
 	// ModelID is the model from the frontmatter (e.g. "gemini-3-flash-preview").
@@ -34,20 +34,35 @@ func Load(baseDir, name string) (*Definition, error) {
 		return nil, fmt.Errorf("agentdef.Load: reading %q: %w", promptPath, err)
 	}
 
-	parsed, err := dp.ParseDocument(string(data))
+	dotprompt := dp.NewDotprompt(nil)
+	rendered, err := dotprompt.Render(string(data), &dp.DataArgument{}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("agentdef.Load: parsing %q: %w", promptPath, err)
+		return nil, fmt.Errorf("agentdef.Load: rendering %q: %w", promptPath, err)
+	}
+
+	// Collect system messages as the instruction.
+	var systemParts []string
+	for _, msg := range rendered.Messages {
+		if msg.Role == dp.RoleSystem {
+			for _, part := range msg.Content {
+				if tp, ok := part.(*dp.TextPart); ok {
+					if text := strings.TrimSpace(tp.Text); text != "" {
+						systemParts = append(systemParts, text)
+					}
+				}
+			}
+		}
 	}
 
 	def := &Definition{
 		Name:        name,
-		Instruction: strings.TrimSpace(parsed.Template),
+		Instruction: strings.Join(systemParts, "\n"),
 	}
 
 	// Extract model ID from frontmatter if present.
 	// dotprompt uses "googleai/<model>" format; strip the provider prefix.
-	if parsed.Model != "" {
-		def.ModelID = parsed.Model
+	if rendered.Model != "" {
+		def.ModelID = rendered.Model
 		if _, after, ok := strings.Cut(def.ModelID, "/"); ok {
 			def.ModelID = after
 		}

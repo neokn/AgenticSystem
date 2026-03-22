@@ -28,17 +28,10 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/agent"
-	"google.golang.org/adk/agent/llmagent"
-	"google.golang.org/adk/model/gemini"
-	"google.golang.org/adk/plugin"
-	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 
-	"github.com/neokn/agenticsystem/internal/agentdef"
+	"github.com/neokn/agenticsystem/internal/appwire"
 	"github.com/neokn/agenticsystem/internal/memory"
-	"github.com/neokn/agenticsystem/internal/shelltool"
-	"google.golang.org/adk/tool"
-	"google.golang.org/adk/tool/functiontool"
 )
 
 // cliConfig holds parsed command-line flags.
@@ -134,106 +127,28 @@ func writeMetricsToFile(path, content string) error {
 //  8. Run conversation loop (stdin → agent → stdout)
 //  9. On exit: print metrics report
 func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writer, errOutput io.Writer) error {
-	// Step 0: Load agent definition from agents/demo_agent/agent.prompt
-	def, err := agentdef.Load(".", "demo_agent")
-	if err != nil {
-		return fmt.Errorf("failed to load agent definition: %w", err)
-	}
-
-	// Step 1: Create genai.Client
 	apiKey := os.Getenv("GOOGLE_API_KEY")
-	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey: apiKey,
+
+	app, err := appwire.New(ctx, apiKey, appwire.Config{
+		AgentDir:       ".",
+		AgentName:      "demo_agent",
+		AppName:        "demo_agent_app",
+		SessionService: session.InMemoryService(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create genai.Client: %w", err)
+		return fmt.Errorf("assembling app: %w", err)
 	}
 
-	// Step 2: ModelProfile from agent definition (compress worker: gemini-3.1-flash-lite-preview)
-	reg, err := memory.NewRegistry()
-	if err != nil {
-		return fmt.Errorf("failed to create model registry: %w", err)
-	}
-	profile, err := reg.GetProfile(def.ModelID)
-	if err != nil {
-		return fmt.Errorf("failed to get model profile: %w", err)
-	}
-	profile.CompressModelID = "gemini-3.1-flash-lite-preview"
-
-	// Step 3: CompressStrategy (Generational with real GenaiWorker)
-	worker := memory.NewGenaiWorker(genaiClient)
-	strategy := memory.NewGenerational(memory.GenerationalConfig{}, worker, profile)
-
-	// Step 4: MemoryPlugin
-	memPlugin, err := memory.NewMemoryPlugin(genaiClient, strategy, profile, 0)
-	if err != nil {
-		return fmt.Errorf("failed to create memory plugin: %w", err)
-	}
-
-	// Step 6: Build ADK plugin
-	pl, err := memPlugin.BuildPlugin()
-	if err != nil {
-		return fmt.Errorf("failed to build ADK plugin: %w", err)
-	}
-
-	// Step 7a: Create ADK Gemini model.
-	// Note: gemini.NewModel accepts a *genai.ClientConfig (not an existing *genai.Client),
-	// so a separate client configuration is required here. The genaiClient created in Step 1
-	// is used exclusively for the compress worker; the ADK Gemini model manages its own
-	// internal client lifecycle via the ClientConfig it receives.
-	llmModel, err := gemini.NewModel(ctx, profile.ModelID, &genai.ClientConfig{
-		APIKey: apiKey,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create Gemini model: %w", err)
-	}
-
-	// Step 7b: Create shell tool and LLMAgent
-	shellTool, err := functiontool.New(functiontool.Config{
-		Name:                "shell_exec",
-		Description:         "Execute a shell command and return stdout and exit code.",
-		RequireConfirmation: false,
-	}, shelltool.ToolHandlerFunc)
-	if err != nil {
-		return fmt.Errorf("failed to create shell tool: %w", err)
-	}
-
-	a, err := llmagent.New(llmagent.Config{
-		Name:        def.Name,
-		Model:       llmModel,
-		Instruction: def.Instruction,
-		Description: "Demo agent for end-to-end verification of context memory manager.",
-		Tools:       []tool.Tool{shellTool},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create LLM agent: %w", err)
-	}
-
-	// Step 7c: Create session service and Runner
-	sessionSvc := session.InMemoryService()
-	appName := "demo_agent_app"
 	userID := "demo_user"
-
-	sessResp, err := sessionSvc.Create(ctx, &session.CreateRequest{
-		AppName: appName,
+	sessResp, err := app.SessionService.Create(ctx, &session.CreateRequest{
+		AppName: app.AppName,
 		UserID:  userID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create session: %w", err)
 	}
 	sess := sessResp.Session
-
-	r, err := runner.New(runner.Config{
-		AppName:        appName,
-		Agent:          a,
-		SessionService: sessionSvc,
-		PluginConfig: runner.PluginConfig{
-			Plugins: []*plugin.Plugin{pl},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create runner: %w", err)
-	}
+	memPlugin := app.MemoryPlugin
 
 	// Step 8: Conversation loop
 	// usageRatioCurve records the usage ratio snapshot after each turn.
@@ -269,7 +184,7 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 		responseText := ""
 		isOOM := false
 
-		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, agent.RunConfig{}) {
+		for event, err := range app.Runner.Run(ctx, userID, sess.ID(), userMsg, agent.RunConfig{}) {
 			if err != nil {
 				fmt.Fprintf(errOutput, "AGENT_ERROR: %v\n", err)
 				continue
