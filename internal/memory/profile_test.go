@@ -210,6 +210,66 @@ func TestNewRegistry_BuiltinProfilesStillAvailable_WhenOtherModelCustomised(t *t
 	}
 }
 
+// Task 5: Required-field validation in NewRegistry
+
+func TestNewRegistry_ReturnsError_WhenCustomProfileHasEmptyModelID(t *testing.T) {
+	// Arrange
+	invalid := ModelProfile{
+		ModelID:             "",
+		ContextWindowTokens: 100000,
+	}
+
+	// Act
+	reg, err := NewRegistry(invalid)
+
+	// Assert
+	if err == nil {
+		t.Fatal("expected error for empty ModelID, got nil")
+	}
+	if reg != nil {
+		t.Error("expected nil registry on validation error")
+	}
+}
+
+func TestNewRegistry_ReturnsError_WhenCustomProfileHasZeroContextWindowTokens(t *testing.T) {
+	// Arrange
+	invalid := ModelProfile{
+		ModelID:             "some-model",
+		ContextWindowTokens: 0,
+	}
+
+	// Act
+	reg, err := NewRegistry(invalid)
+
+	// Assert
+	if err == nil {
+		t.Fatal("expected error for zero ContextWindowTokens, got nil")
+	}
+	if reg != nil {
+		t.Error("expected nil registry on validation error")
+	}
+}
+
+func TestNewRegistry_ErrorMessage_ContainsFieldContext_ForEmptyModelID(t *testing.T) {
+	// Arrange
+	invalid := ModelProfile{
+		ModelID:             "",
+		ContextWindowTokens: 100000,
+	}
+
+	// Act
+	_, err := NewRegistry(invalid)
+
+	// Assert
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+	if len(msg) == 0 {
+		t.Error("expected descriptive error message, got empty string")
+	}
+}
+
 func TestModelProfile_PassedByValue_IsImmutable(t *testing.T) {
 	// Arrange — value object: modifying a copy does not affect original
 	original := ModelProfile{
