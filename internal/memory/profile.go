@@ -6,6 +6,7 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // ErrModelNotFound is returned by GetProfile when the requested model ID is not
@@ -94,6 +95,21 @@ var builtinProfiles = []ModelProfile{
 		ContextWindowTokens: 1048576,
 		MaxOutputTokens:     65536,
 	},
+}
+
+// GetEffectiveCompressModelID returns the model ID to use for the compress worker.
+// If CompressModelID is set, it is returned unchanged.
+// If CompressModelID is empty, the primary ModelID is returned and a warning is
+// emitted via slog so operators can see the fallback in logs.
+// This helper carries no error return — the fallback is valid behaviour, not a fault.
+func (p ModelProfile) GetEffectiveCompressModelID() string {
+	if p.CompressModelID != "" {
+		return p.CompressModelID
+	}
+	slog.Warn("CompressModelID not set; falling back to primary model",
+		"primaryModelID", p.ModelID,
+	)
+	return p.ModelID
 }
 
 // GetProfile returns the ModelProfile for the given model ID.

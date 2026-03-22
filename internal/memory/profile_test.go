@@ -270,6 +270,40 @@ func TestNewRegistry_ErrorMessage_ContainsFieldContext_ForEmptyModelID(t *testin
 	}
 }
 
+// Task 6: GetEffectiveCompressModelID helper
+
+func TestGetEffectiveCompressModelID_ReturnsCompressModelID_WhenNonEmpty(t *testing.T) {
+	// Arrange
+	p := ModelProfile{
+		ModelID:         "gemini-2.5-pro",
+		CompressModelID: "gemini-2.0-flash-lite",
+	}
+
+	// Act
+	result := p.GetEffectiveCompressModelID()
+
+	// Assert
+	if result != "gemini-2.0-flash-lite" {
+		t.Errorf("expected gemini-2.0-flash-lite, got %s", result)
+	}
+}
+
+func TestGetEffectiveCompressModelID_ReturnsPrimaryModelID_WhenCompressModelIDEmpty(t *testing.T) {
+	// Arrange — CompressModelID absent, should fall back to ModelID
+	p := ModelProfile{
+		ModelID:         "gemini-2.5-pro",
+		CompressModelID: "",
+	}
+
+	// Act
+	result := p.GetEffectiveCompressModelID()
+
+	// Assert
+	if result != "gemini-2.5-pro" {
+		t.Errorf("expected fallback to primary ModelID gemini-2.5-pro, got %s", result)
+	}
+}
+
 func TestModelProfile_PassedByValue_IsImmutable(t *testing.T) {
 	// Arrange — value object: modifying a copy does not affect original
 	original := ModelProfile{
