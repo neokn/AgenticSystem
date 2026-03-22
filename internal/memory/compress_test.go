@@ -269,6 +269,43 @@ func TestGenerational_buildPrompt_should_include_existingSummary_in_rendered_out
 	}
 }
 
+// TestGenerational_buildPrompt_should_return_error_when_turns_is_empty verifies
+// that buildPrompt returns an explicit error when the turns slice is nil or empty,
+// since dotprompt does not enforce required schema fields at render time and would
+// silently produce an empty prompt.
+func TestGenerational_buildPrompt_should_return_error_when_turns_is_empty(t *testing.T) {
+	cases := []struct {
+		name  string
+		turns []ConversationTurn
+	}{
+		{"nil turns", nil},
+		{"empty turns slice", []ConversationTurn{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Arrange
+			g := &Generational{
+				cfg: GenerationalConfig{
+					OldestN:     3,
+					PromptStore: compileInlineStore(t),
+				},
+			}
+
+			// Act
+			prompt, err := g.buildPrompt("", tc.turns)
+
+			// Assert
+			if err == nil {
+				t.Fatalf("expected error for empty turns, got nil (prompt=%q)", prompt)
+			}
+			if prompt != "" {
+				t.Errorf("expected empty prompt string on error, got %q", prompt)
+			}
+		})
+	}
+}
+
 // TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store
 func TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store(t *testing.T) {
 	// Arrange — store that always returns an error (simulates missing .prompt file)
@@ -329,23 +366,72 @@ func TestStrategyRegistry_should_resolve_generational_by_name(t *testing.T) {
 
 // ---- Task 12: CompressResult ratio + fallback model warning tests ----
 
-// TestCompressResult_should_calculate_ratio_correctly
+// TestCompressResult_should_calculate_ratio_correctly verifies that
+// Generational.Compress populates ActualCompressionRatio correctly as
+// CandidatesTokenCount / originalTokens using values from a real Compress call.
 func TestCompressResult_should_calculate_ratio_correctly(t *testing.T) {
 	// Arrange
-	originalTokens := 100
-	compressedTokens := 40
-
-	// Act
-	ratio := float64(compressedTokens) / float64(originalTokens)
-	r := CompressResult{
-		OriginalTokens:         originalTokens,
-		CompressedTokens:       compressedTokens,
-		ActualCompressionRatio: ratio,
+	// mockRatioWorker returns a fixed CandidatesTokenCount so we can verify
+	// the ratio calculation without any arithmetic in the test itself.
+	worker := &mockRatioWorker{candidatesTokenCount: 40}
+	g := &Generational{
+		cfg: GenerationalConfig{
+			OldestN:     5,
+			PromptStore: compileInlineStore(t),
+		},
+		worker: worker,
+	}
+	// Build 4 turns of 25 tokens each → originalTokens = 100
+	turns := make([]ConversationTurn, 4)
+	for i := range turns {
+		turns[i] = ConversationTurn{Role: "user", Content: "msg", TokenCount: 25}
+	}
+	profile := ModelProfile{
+		ModelID:             "gemini-2.0-flash",
+		ContextWindowTokens: 1048576,
 	}
 
+	// Act
+	result, err := g.Compress(context.Background(), turns, "", profile)
+
 	// Assert
-	if r.ActualCompressionRatio != 0.4 {
-		t.Errorf("expected ratio 0.4, got %f", r.ActualCompressionRatio)
+	if err != nil {
+		t.Fatalf("Compress() unexpected error: %v", err)
+	}
+	wantRatio := float64(40) / float64(100) // candidatesTokenCount / originalTokens
+	if result.ActualCompressionRatio != wantRatio {
+		t.Errorf("ActualCompressionRatio = %f, want %f", result.ActualCompressionRatio, wantRatio)
+	}
+}
+
+// TestGenerational_Compress_should_return_error_when_worker_is_nil verifies that
+// calling Compress with a nil worker returns a descriptive error instead of panicking.
+func TestGenerational_Compress_should_return_error_when_worker_is_nil(t *testing.T) {
+	// Arrange
+	g := &Generational{
+		cfg: GenerationalConfig{
+			OldestN:     5,
+			PromptStore: compileInlineStore(t),
+		},
+		worker: nil, // intentionally nil
+	}
+	profile := ModelProfile{
+		ModelID:             "gemini-2.0-flash",
+		ContextWindowTokens: 1048576,
+	}
+
+	// Act
+	result, err := g.Compress(context.Background(), makeNTurns(2), "", profile)
+
+	// Assert
+	if err == nil {
+		t.Fatal("expected error when worker is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "worker is nil") {
+		t.Errorf("expected error to contain 'worker is nil', got: %s", err.Error())
+	}
+	if result != nil {
+		t.Errorf("expected nil result when worker is nil, got non-nil")
 	}
 }
 
@@ -508,6 +594,18 @@ func (m *mockRecordingWorker) Summarize(_ context.Context, model, prompt string)
 		PromptTokenCount:     50,
 		CandidatesTokenCount: 10,
 		TotalTokenCount:      60,
+	}, nil
+}
+
+// mockRatioWorker returns a fixed CandidatesTokenCount for ratio verification.
+type mockRatioWorker struct {
+	candidatesTokenCount int32
+}
+
+func (m *mockRatioWorker) Summarize(_ context.Context, _, _ string) (string, *WorkerUsageMetadata, error) {
+	return "summary", &WorkerUsageMetadata{
+		CandidatesTokenCount: m.candidatesTokenCount,
+		TotalTokenCount:      m.candidatesTokenCount,
 	}, nil
 }
 

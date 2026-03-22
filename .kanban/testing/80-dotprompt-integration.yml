@@ -4,6 +4,7 @@ depends-on: [50-s4-compress-strategy]
 completed-by:
   backlog: jules
   in-progress: james
+  testing: judge
 acceptance:
   - given: prompts/summarize.prompt exists with valid Handlebars frontmatter and body
     when: Generational.buildPrompt is called with existingSummary and a list of ConversationTurns
@@ -40,6 +41,10 @@ history:
     at: "2026-03-22T18:30:00+08:00"
   - stage: testing
     at: "2026-03-22T19:30:00+08:00"
+  - stage: in-progress/backend
+    at: "2026-03-22T12:49:00+08:00"
+  - stage: testing
+    at: "2026-03-22T14:00:00+08:00"
 description: |
   將 Generational 壓縮策略的 prompt template 從 Go text/template 改為 Google dotprompt。
 
@@ -131,3 +136,66 @@ comments:
       Patterns applied: Template Method (prompt loading via PromptStore interface)
 
       Test results: go test ./... passes — all 2 packages green, no text/template import remaining in compress.go
+  - author: judge
+    at: "2026-03-22T12:49:00+08:00"
+    text: |-
+      ## Test Verification Report
+
+      **Verdict:** FAIL
+
+      ### Acceptance Criteria Coverage
+      - [x] AC1: Valid .prompt + non-empty existingSummary → renders non-empty string with turns content
+            Covered by: TestGenerational_buildPrompt_should_include_existingSummary_in_rendered_output
+      - [x] AC2: Empty existingSummary → rendered prompt omits prior-summary block
+            Covered by: TestGenerational_buildPrompt_should_render_turns_when_existingSummary_absent
+      - [x] AC3: GenaiWorker receives structured content (no raw string concat at call site)
+            GenaiWorker.Summarize wraps prompt string into genai.Content{Role:"user"} at lines 308-315.
+            buildPrompt result passed directly to worker.Summarize with no concatenation. PASS.
+      - [x] AC4: Missing .prompt file → Compress returns (nil, error)
+            Covered by: TestGenerational_Compress_should_return_error_when_buildPrompt_fails (failingPromptStore)
+            and TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store. PASS.
+      - [ ] AC5: Missing required variable → render error propagates as (nil, error)
+            FAIL — NO TEST EXISTS. Worse: dotprompt does NOT enforce required fields at render time.
+            Confirmed by probe: omitting turns renders silently with empty string, no error returned.
+            The implementation always passes turns so the gap is masked in production, but the
+            AC criterion is unverifiable and untested. James must add explicit validation in buildPrompt
+            (e.g. return error if formatTurns(turns) is empty or if rendered text is empty) and
+            write a test that calls buildPrompt with an empty turns slice and expects (nil/"", error).
+      - [x] AC6: Test isolation — dp.Compile inline, no filesystem
+            Covered by: inlinePromptStore + compileInlineStore helper used throughout.
+            All buildPrompt and Compress tests use in-memory store. PASS.
+
+      ### Test Quality
+      - AAA structure: OK — all tests have clear Arrange/Act/Assert sections
+      - Naming: OK — descriptive scenario+result names throughout
+      - Pyramid: OK — all unit-level, no integration or E2E tests needed
+
+      ### Additional Checks
+      - text/template import in compress.go: ABSENT — confirmed no text/template
+      - prompts/summarize.prompt exists: YES — valid Handlebars frontmatter + body
+      - go test -race ./internal/memory/: PASS
+      - go vet ./...: PASS
+
+      ### Test Results
+      - Total: 16 targeted tests
+      - Passed: 16
+      - Failed: 0
+
+      ### Issues Found
+      1. AC5 has NO corresponding test. dotprompt silently ignores missing required schema fields.
+         The implementation always populates turns so a missing-variable scenario requires an
+         explicit guard. James must:
+         a) Add validation to buildPrompt: if formatTurns(turns) produces empty string, return error
+            OR if rendered output is empty, return error — to ensure AC5 is enforceable.
+         b) Add test: TestGenerational_buildPrompt_should_return_error_when_required_turns_variable_is_absent
+            that calls buildPrompt with nil/empty turns and asserts (error \!= nil).
+  - author: james
+    at: "2026-03-22T14:00:00+08:00"
+    text: |-
+      AC5 fix applied.
+
+      Files modified:
+      - internal/memory/compress.go: added guard in buildPrompt — if formatTurns(turns) returns empty string, return error "buildPrompt: turns must not be empty" before reaching dotprompt render
+      - internal/memory/compress_test.go: added TestGenerational_buildPrompt_should_return_error_when_turns_is_empty with nil and empty-slice sub-cases; both assert err \!= nil and prompt == ""
+
+      go test -race ./internal/memory/ — all pass (18 tests, 0 failures)

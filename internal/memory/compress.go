@@ -167,8 +167,13 @@ func (g *Generational) buildPrompt(existingSummary string, turns []ConversationT
 		return "", fmt.Errorf("buildPrompt: failed to compile prompt template: %w", err)
 	}
 
+	formattedTurns := formatTurns(turns)
+	if formattedTurns == "" {
+		return "", fmt.Errorf("buildPrompt: turns must not be empty")
+	}
+
 	input := map[string]any{
-		"turns": formatTurns(turns),
+		"turns": formattedTurns,
 	}
 	if existingSummary != "" {
 		input["existingSummary"] = existingSummary
@@ -196,6 +201,10 @@ func (g *Generational) buildPrompt(existingSummary string, turns []ConversationT
 // The effective model is determined by profile.GetEffectiveCompressModelID().
 // Returns (nil, error) if buildPrompt or the worker fails — never a partial CompressResult.
 func (g *Generational) Compress(ctx context.Context, candidates []ConversationTurn, existingSummary string, profile ModelProfile) (*CompressResult, error) {
+	if g.worker == nil {
+		return nil, fmt.Errorf("compress: worker is nil — inject a compressWorker via NewGenerational before calling Compress")
+	}
+
 	modelID := profile.GetEffectiveCompressModelID()
 	prompt, err := g.buildPrompt(existingSummary, candidates)
 	if err != nil {
