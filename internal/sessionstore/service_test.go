@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -170,6 +171,9 @@ func TestGet_should_error_when_session_not_found(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("expected error message to contain session ID %q, got: %v", "nonexistent", err)
 	}
 }
 
