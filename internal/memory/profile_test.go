@@ -304,6 +304,75 @@ func TestGetEffectiveCompressModelID_ReturnsPrimaryModelID_WhenCompressModelIDEm
 	}
 }
 
+// Task 7: Comprehensive acceptance criteria coverage
+
+// AC#1 — gemini-2.0-flash full field check (already tested above, adding
+//         explicit check for Provider field per acceptance criteria)
+func TestGetProfile_AC1_GeminiFlash_ProviderIsGoogle(t *testing.T) {
+	// Arrange
+	reg, _ := NewRegistry()
+
+	// Act
+	p, err := reg.GetProfile("gemini-2.0-flash")
+
+	// Assert
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if p.Provider != "google" {
+		t.Errorf("AC1: expected Provider google, got %s", p.Provider)
+	}
+}
+
+// AC#2 — gemini-2.5-pro has non-empty or empty CompressModelID (both valid)
+func TestGetProfile_AC2_Gemini25Pro_CompressModelIDIsStringValue(t *testing.T) {
+	// Arrange
+	reg, _ := NewRegistry()
+
+	// Act
+	p, err := reg.GetProfile("gemini-2.5-pro")
+
+	// Assert — no error; CompressModelID can be empty or populated, both valid
+	if err != nil {
+		t.Fatalf("AC2: expected no error, got %v", err)
+	}
+	// CompressModelID is a string field — zero value "" is valid per spec
+	_ = p.CompressModelID
+}
+
+// AC#8 — zero cost fields are valid (custom model with all costs at 0.0)
+func TestNewRegistry_AC8_ZeroCostFields_AreValid(t *testing.T) {
+	// Arrange — all cost fields at zero value
+	p := ModelProfile{
+		ModelID:                       "private-test-model",
+		Provider:                      "google",
+		ContextWindowTokens:           100000,
+		MaxOutputTokens:               4096,
+		CostPer1KInputTokens:          0.0,
+		CostPer1KOutputTokens:         0.0,
+		CompressCostPer1KInputTokens:  0.0,
+		CompressCostPer1KOutputTokens: 0.0,
+	}
+
+	// Act
+	reg, err := NewRegistry(p)
+
+	// Assert — no error; zero cost is acceptable for testing/private models
+	if err != nil {
+		t.Fatalf("AC8: expected no error for zero cost fields, got %v", err)
+	}
+	got, err := reg.GetProfile("private-test-model")
+	if err != nil {
+		t.Fatalf("AC8: GetProfile returned error: %v", err)
+	}
+	if got.CostPer1KInputTokens != 0.0 {
+		t.Errorf("AC8: expected CostPer1KInputTokens 0.0, got %f", got.CostPer1KInputTokens)
+	}
+	if got.CostPer1KOutputTokens != 0.0 {
+		t.Errorf("AC8: expected CostPer1KOutputTokens 0.0, got %f", got.CostPer1KOutputTokens)
+	}
+}
+
 func TestModelProfile_PassedByValue_IsImmutable(t *testing.T) {
 	// Arrange — value object: modifying a copy does not affect original
 	original := ModelProfile{
