@@ -4,6 +4,8 @@ depends-on: []
 completed-by:
   backlog: "jules"
   in-progress: "james"
+  testing: "judge"
+  review: "jobs"
 acceptance:
   # --- Chunk A: go.mod genai direct dependency (Card 10) ---
   - given: google.golang.org/genai is imported directly in compress.go and main.go
@@ -195,6 +197,43 @@ comments:
       committable and passes go test -race before moving to the next. No story
       splitting needed; all items share one domain (polish/cleanup) and one
       developer can sequence them in a single sitting.
+  - author: "judge"
+    at: "2026-03-22T14:10:00+08:00"
+    text: |
+      ## Test Verification Report
+
+      **Verdict:** PASS
+
+      ### Acceptance Criteria Coverage
+      - [x] Chunk A (go.mod genai direct dep): google.golang.org/genai listed in direct require block, no // indirect marker
+      - [x] Chunk B (profile_test.go dead assertion): AC2 test at line ~358 asserts CompressModelID == "" via comparison, replacing dead _ = assignment
+      - [x] Chunk B (AAA markers): TestGetProfile_ReturnsBuiltin_GeminiFlashLite, Gemini25Pro, Gemini25Flash all have // Arrange / // Act / // Assert comments
+      - [x] Chunk B (NewRegistry error handling): NewRegistry(custom) call site uses t.Fatalf; remaining reg, _ = NewRegistry() sites have inline rationale comments
+      - [x] Chunk C (otherTotal==0 guard): NewLayout returns fmt.Errorf with "otherTotal" in message when pinned+summary+active==0
+      - [x] Chunk C (trivial test removed): TestLayoutConfig_should_hold_per_segment_ratios absent from layout_test.go
+      - [x] Chunk C (expanded comment): deductActive comment explains exact deficit accounting (no rounding loss)
+      - [x] Chunk D (nil-worker guard): Generational.Compress returns error containing "worker is nil" instead of panicking
+      - [x] Chunk D (ratio test rewritten): TestCompressResult_should_calculate_ratio_correctly calls g.Compress with mockRatioWorker, asserts float64(40)/float64(100)
+      - [x] Chunk D (SelectCandidates comment): comment accurately describes make+copy allocating new backing array
+      - [x] Chunk E (dual-client comment): Step 7a comment explains gemini.NewModel requires *genai.ClientConfig not *genai.Client
+      - [x] Chunk E (OOM casing aligned): OOM_WARNING line prints "Context window exhausted. Please start a new conversation." matching sentence-case with period
+      - [x] Chunk E (stale test comment): Test_should_assemble_memory_layout_with_default_config comment reads "Assembles MemoryLayout using real memory types without a genai.Client — no API key required."
+
+      ### Test Quality
+      - AAA structure: OK — all new tests follow Arrange/Act/Assert with explicit section comments
+      - Naming: OK — test names describe scenario and expected result
+      - Pyramid: OK — all tests are unit-level, no I/O or network calls
+
+      ### Test Results
+      - Total: 101 tests across internal/memory and cmd/agent
+      - Passed: 101
+      - Failed: 0
+      - Race detector: clean (go test -race ./...)
+      - go vet: clean (no output)
+
+      ### Issues Found
+      - None. All acceptance criteria verified. All tests green.
+
   - author: "james"
     at: "2026-03-22T12:55:00+08:00"
     text: |
@@ -235,3 +274,91 @@ comments:
       - Chunk D item 3: buildPrompt tmpl.Execute error — already handled by Card 80
         which rewrote buildPrompt to use dotprompt and return (string, error).
       All other Chunk D items applied cleanly against Card 80's compress.go changes.
+  - author: "jobs"
+    at: "2026-03-22T14:30:00+08:00"
+    text: |
+      ## Code Review by Jobs
+
+      **Overall Assessment:** LGTM
+      **Code Health Impact:** Improves
+
+      ### Verification Results
+
+      I read each changed file and cross-referenced every acceptance criterion against
+      the actual source. All 13 items checked out. Detailed findings below.
+
+      **Chunk A — go.mod direct dependency**
+      google.golang.org/genai v1.51.0 is in the top-level require block with no
+      // indirect marker. Confirmed.
+
+      **Chunk B — profile.go + profile_test.go**
+      - gofmt: CompressModelID field alignment in profile.go is clean. Confirmed.
+      - Dead assertion: TestGetProfile_AC2_Gemini25Pro_CompressModelIDIsStringValue
+        now performs a real string comparison (p.CompressModelID != ""). The dead
+        _ = assignment is gone. Confirmed.
+      - AAA markers: All three tests (GeminiFlashLite, Gemini25Pro, Gemini25Flash)
+        have // Arrange / // Act / // Assert comments. Confirmed.
+      - Silent error: NewRegistry(custom) call site at line 64 uses t.Fatalf.
+        Remaining reg, _ = NewRegistry() sites carry inline rationale explaining
+        why the no-args call cannot fail. Well-reasoned approach. Confirmed.
+
+      **Chunk C — layout.go + layout_test.go**
+      - otherTotal guard: layout.go lines 108-118 return a descriptive fmt.Errorf
+        containing "otherTotal" with both ContextWindowTokens and MaxOutputTokens
+        in the message. Confirmed.
+      - Trivial test removed: TestLayoutConfig_should_hold_per_segment_ratios is
+        gone. Replaced with TestNewLayout_should_error_when_otherTotal_is_zero_after_floor_calculation,
+        which actually exercises the new guard. Confirmed — test count decrease is a
+        net positive on test quality.
+      - Expanded comment: The deductActive comment now explains the exact deficit
+        accounting invariant. Confirmed.
+
+      **Chunk D — compress.go + compress_test.go**
+      - Nil-worker guard: Generational.Compress checks g.worker == nil at lines
+        204-206 and returns a descriptive error before any dereferencing. Confirmed.
+      - Ratio test rewrite: TestCompressResult_should_calculate_ratio_correctly
+        uses mockRatioWorker (candidatesTokenCount=40), calls g.Compress with 4
+        turns of 25 tokens each (originalTokens=100), and asserts
+        float64(40)/float64(100). This is a genuine behavioral test. Confirmed.
+      - buildPrompt silent error: Card 80 rewrote buildPrompt to return
+        (string, error) with full error propagation — a strictly better outcome
+        than the targeted slog.Warn approach. The current code handles errors
+        correctly throughout. Confirmed acceptable.
+      - SelectCandidates comment: Lines 130-131 now accurately describe
+        make+copy allocating a new backing array. Confirmed.
+
+      **Chunk E — main.go + main_test.go**
+      - Dual-client documented: The Step 7a comment at main.go lines 184-188
+        explains that gemini.NewModel accepts *genai.ClientConfig (not *genai.Client),
+        making the two-configuration pattern intentional and clear to future readers.
+        Confirmed.
+      - OOM casing: Both OOM message sites use sentence-case with a trailing period.
+        Line 278 prints "Context window exhausted. Please start a new conversation."
+        Line 289 prints the same phrasing with an [OOM] prefix for the fallback path.
+        Confirmed.
+      - Stale test comment: Test_should_assemble_memory_layout_with_default_config
+        now reads "Assembles MemoryLayout using real memory types without a
+        genai.Client — no API key required." Confirmed.
+
+      ### Good Things
+      - The mockRatioWorker is a clean, minimal mock that makes the test intent
+        immediately obvious. The helper name clearly signals its purpose.
+      - The inline rationale comments on the NewRegistry() no-args call sites are
+        a good pattern — they document why _ is intentional rather than careless.
+      - The expanded deductActive comment is the right level of detail: it names
+        the mathematical invariant being enforced, which is exactly what "why"
+        comments should do.
+      - Replacing the tautology test with a guard test that actually exercises a
+        failure path is a meaningful improvement to test quality.
+      - Card 80 resolving the buildPrompt issue with a better structural fix than
+        the slog.Warn patch is a good example of opportunistic improvement during
+        related work.
+
+      ### Code Smells Detected
+      None introduced by this change set. This CL removes code smells
+      (dead code, dead assertion) and adds meaningful test coverage.
+
+      ### Recommended Next Steps
+      - The runtime.Caller fragility in DefaultLayoutConfig is still an open
+        architectural note for Jensen. No action needed on this card.
+      - All other items are resolved. This CL is ready to ship.

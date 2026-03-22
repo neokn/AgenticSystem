@@ -317,3 +317,167 @@ zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[ja
 zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
 [2026-03-22T12:48:39+08:00] → judge: .kanban/testing/80-dotprompt-integration.yml (testing)
 .kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/90-review-polish-items[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+[2026-03-22T12:52:21+08:00] → judge: .kanban/testing/80-dotprompt-integration.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/testing/80-dotprompt-integration[judge].yml
+zsh:1: no matches found: .kanban/review/80-dotprompt-integration[jobs].yml
+zsh:1: no matches found: .kanban/review/80-dotprompt-integration[jobs].yml
+zsh:1: no matches found: .kanban/review/80-dotprompt-integration[jobs].yml
+zsh:1: no matches found: .kanban/review/80-dotprompt-integration[jobs].yml
+zsh:1: no matches found: .kanban/review/80-dotprompt-integration[jobs].yml
+zsh:1: no matches found: .kanban/review/80-dotprompt-integration[jobs].yml
+zsh:1: no matches found: .kanban/testing/90-review-polish-items[judge].yml
+zsh:1: no matches found: .kanban/testing/90-review-polish-items[judge].yml
+zsh:1: no matches found: .kanban/testing/90-review-polish-items[judge].yml
+zsh:1: no matches found: .kanban/testing/90-review-polish-items[judge].yml
+zsh:1: no matches found: .kanban/testing/90-review-polish-items[judge].yml
+zsh:1: no matches found: .kanban/testing/90-review-polish-items[judge].yml
+zsh:1: no matches found: .kanban/review/90-review-polish-items[jobs].yml
+zsh:1: no matches found: .kanban/review/90-review-polish-items[jobs].yml
+zsh:1: no matches found: .kanban/review/90-review-polish-items[jobs].yml
+zsh:1: no matches found: .kanban/review/90-review-polish-items[jobs].yml
+zsh:1: no matches found: .kanban/review/90-review-polish-items[jobs].yml
+zsh:1: no matches found: .kanban/review/90-review-polish-items[jobs].yml
+[2026-03-22T20:52:56+08:00] → jules: .kanban/backlog/10-telegram-integration.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+[2026-03-22T20:53:07+08:00] → jules: .kanban/backlog/20-shell-tool-for-llm.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+zsh:1: no matches found: .kanban/backlog/10-telegram-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/10-telegram-integration[jules].yml
+[2026-03-22T20:56:30+08:00] → jensen: .kanban/refined/20a-shell-tool-adk-spike.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jensen: No such file or directory
+[2026-03-22T20:56:35+08:00] → jules: .kanban/backlog/10a-telegram-session-store-and-message-adapter.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+[2026-03-22T20:56:53+08:00] → jensen: .kanban/refined/20b-shell-tool-core-execution.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jensen: No such file or directory
+[2026-03-22T20:56:59+08:00] → jules: .kanban/backlog/10b-telegram-bot-long-polling.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+[2026-03-22T20:57:16+08:00] → jensen: .kanban/refined/20c-shell-tool-human-approval-gate.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jensen: No such file or directory
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/10-telegram-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/10-telegram-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-shell-tool-for-llm[jules].yml
+[2026-03-22T21:01:53+08:00] → jensen: .kanban/refined/10-telegram-bot-mvp.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jensen: No such file or directory
+[2026-03-22T21:02:06+08:00] → jensen: .kanban/refined/20-shell-tool-mvp.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jensen: No such file or directory
+zsh:1: no matches found: .kanban/refined/10-telegram-bot-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/10-telegram-bot-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/10-telegram-bot-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/10-telegram-bot-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/20-shell-tool-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/20-shell-tool-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/20-shell-tool-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/20-shell-tool-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/20-shell-tool-mvp[jensen].yml
+zsh:1: no matches found: .kanban/refined/20-shell-tool-mvp[jensen].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/10-telegram-bot-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/20-shell-tool-mvp[james].yml
+[2026-03-22T21:16:28+08:00] → judge: .kanban/testing/20-shell-tool-mvp.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/10-telegram-bot-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/20-shell-tool-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/20-shell-tool-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/20-shell-tool-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/20-shell-tool-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/20-shell-tool-mvp[judge].yml
+zsh:1: no matches found: .kanban/testing/20-shell-tool-mvp[judge].yml
+[2026-03-22T21:31:27+08:00] → jobs: .kanban/review/20-shell-tool-mvp.yml (review)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jobs: No such file or directory
+zsh:1: no matches found: .kanban/review/20-shell-tool-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/20-shell-tool-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/10-telegram-bot-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/10-telegram-bot-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/20-shell-tool-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/20-shell-tool-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/20-shell-tool-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/20-shell-tool-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/10-telegram-bot-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/10-telegram-bot-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/10-telegram-bot-mvp[jobs].yml
+zsh:1: no matches found: .kanban/review/10-telegram-bot-mvp[jobs].yml
+[2026-03-22T21:47:03+08:00] → jules: .kanban/backlog/90-gfs-tiered-compression-strategy.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+[2026-03-22T21:50:32+08:00] → jules: .kanban/backlog/05-session-persist-jsonl.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+zsh:1: no matches found: .kanban/backlog/05-session-persist-jsonl[jules].yml
+zsh:1: no matches found: .kanban/backlog/05-session-persist-jsonl[jules].yml
+[2026-03-22T21:53:20+08:00] → jules: .kanban/backlog/06-telegram-session-per-chat.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+zsh:1: no matches found: .kanban/backlog/05-session-persist-jsonl[jules].yml
+zsh:1: no matches found: .kanban/backlog/05-session-persist-jsonl[jules].yml
+zsh:1: no matches found: .kanban/backlog/05-session-persist-jsonl[jules].yml
+zsh:1: no matches found: .kanban/backlog/05-session-persist-jsonl[jules].yml
+zsh:1: no matches found: .kanban/refined/05-session-persist-jsonl[jensen].yml
+zsh:1: no matches found: .kanban/refined/05-session-persist-jsonl[jensen].yml
+zsh:1: no matches found: .kanban/refined/05-session-persist-jsonl[jensen].yml
+zsh:1: no matches found: .kanban/refined/05-session-persist-jsonl[jensen].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/05-session-persist-jsonl[james].yml
+[2026-03-22T22:01:34+08:00] → judge: .kanban/testing/05-session-persist-jsonl.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory

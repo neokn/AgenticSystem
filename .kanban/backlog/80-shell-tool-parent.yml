@@ -1,0 +1,52 @@
+title: LLM Shell 執行工具
+assignee: neokn
+labels:
+  - backend
+  - core-logic
+history:
+  - stage: backlog
+    at: 2026-03-22T20:50:00+08:00
+  - stage: in-progress
+    at: "2026-03-22T21:00:00+08:00"
+  - stage: refined
+    at: "2026-03-22T00:00:00+08:00"
+    note: split into 20a, 20b, 20c
+description: |
+  讓 agent 具備執行 shell 命令的能力，透過 ADK 的 Tool 機制
+  註冊一個 shell execution tool，使 LLM 可以在對話中主動
+  執行系統指令並取得結果。
+
+  需要評估：
+  - 安全性：沙盒、白名單、timeout、資源限制
+  - ADK Tool 註冊方式（FunctionTool 或 MCP toolset）
+  - 輸出處理：stdout/stderr 擷取、大輸出截斷
+  - 使用者確認機制：危險指令是否需要人工核准
+tasks:
+  - text: 調研 ADK FunctionTool 和 MCP tool 的差異與選型
+    done: false
+  - text: 設計安全模型（沙盒、白名單、timeout）
+    done: false
+  - text: 實作 shell execution tool
+    done: false
+  - text: 註冊到 LLMAgent 並測試 LLM 主動呼叫
+    done: false
+  - text: 安全測試：危險指令攔截、timeout 觸發
+    done: false
+comments:
+  - author: jules
+    at: "2026-03-22T00:00:00+08:00"
+    text: |-
+      此卡已精煉並拆分為三張子卡：
+        - 20a-shell-tool-adk-spike（Learning story：ADK 選型 + 安全模型設計，時限 2 工作天）
+        - 20b-shell-tool-core-execution（Earning story：白名單內安全指令執行 + 輸出擷取）
+        - 20c-shell-tool-human-approval-gate（Earning story：危險指令人工核准閘道）
+
+      拆分策略：
+        - Strategy 8（Split Learning from Earning）：20a 為 spike，產出決策文件而非功能
+        - Strategy 4（Split by Examples of Usefulness）：20b 先交付安全指令場景，20c 再疊加危險指令監督
+
+      交付順序：20a → 20b → 20c（20c depends-on 20b, 20b depends-on 20a）
+
+      20b 可在沒有 20c 的情況下單獨上線（危險指令由白名單擋下），提供獨立業務價值。
+completed-by:
+  backlog: jules

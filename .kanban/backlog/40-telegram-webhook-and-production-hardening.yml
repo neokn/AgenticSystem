@@ -1,0 +1,72 @@
+title: "Telegram Bot Webhook Mode and Production Hardening"
+assignee: ""
+labels:
+  - backend
+  - integration
+  - architecture
+depends-on:
+  - 10b-telegram-bot-long-polling
+history:
+  - stage: backlog
+    at: 2026-03-22T22:00:00+08:00
+description: |
+  Upgrade the Telegram Bot from MVP Long Polling to Webhook mode and add
+  production-grade reliability features. This story improves capacity and
+  operational quality — the feature already works after 10b; this story makes
+  it production-ready.
+
+  Scope:
+  1. Webhook mode: register a public HTTPS endpoint with Telegram; handle
+     incoming Update POSTs. Requires a publicly reachable URL (e.g. behind
+     a reverse proxy or deployed to Cloud Run).
+  2. Per-chat concurrency control: ensure messages from the same chat are
+     processed sequentially (one goroutine per chat) to prevent out-of-order
+     replies when a user sends messages quickly.
+  3. Graceful shutdown: on SIGTERM, stop accepting new messages, wait for
+     in-flight handlers to complete (deadline: 10s), then exit cleanly.
+  4. Persistent SessionStore: replace the in-memory session map with a
+     file-backed or SQLite-backed store so ADK session IDs survive restarts.
+     (Architecture decision required: Jensen to advise on storage backend choice.)
+
+  Trade-off deferred from 10b: Long Polling's ~1s latency and restart-lost
+  sessions are acceptable for MVP but not for production.
+
+  Note: this card carries the `architecture` label because the persistent
+  session store backend choice (SQLite vs file vs Redis) requires architectural
+  review before implementation begins.
+
+tasks:
+  - text: "Implement Webhook HTTP handler for Telegram Update POSTs"
+    done: false
+  - text: "Add HTTPS TLS configuration (or delegate to reverse proxy)"
+    done: false
+  - text: "Implement per-chat message serialization (channel or mutex per chat ID)"
+    done: false
+  - text: "Implement graceful shutdown with 10-second drain timeout"
+    done: false
+  - text: "Replace in-memory SessionStore with persistent backend (architecture decision required)"
+    done: false
+  - text: "Integration test: restart the bot mid-conversation; verify session continuity"
+    done: false
+
+acceptance:
+  - given: "TELEGRAM_WEBHOOK_URL is set and the bot is running in webhook mode"
+    when: "Telegram delivers an Update POST to the webhook endpoint"
+    then: "The handler responds with HTTP 200 within 2 seconds and the user receives a reply"
+  - given: "A user sends 5 messages in rapid succession (within 1 second) to the same chat"
+    when: "All 5 messages are processed"
+    then: "Replies arrive in the same order as the messages were sent; no reply is dropped"
+  - given: "The bot is in the middle of processing a message when SIGTERM is received"
+    when: "The process handles the signal"
+    then: "The in-flight message completes and a reply is sent before the process exits; new messages are rejected after signal receipt; process exits with code 0 within 10 seconds"
+  - given: "The bot has an active conversation (session) and is then restarted"
+    when: "The user sends a new message after restart"
+    then: "The bot resumes the same ADK session (same session ID) and context is preserved"
+  - given: "TELEGRAM_WEBHOOK_URL is set to an invalid (non-HTTPS) URL"
+    when: "The bot attempts to register the webhook with Telegram"
+    then: "The process exits with a non-zero exit code and logs the Telegram API error response"
+
+comments:
+  - author: jules
+    at: 2026-03-22T22:00:00+08:00
+    text: "Split from parent card 10-telegram-integration. This is story 10c — production hardening. Optional after 10b ships. Marked architecture because the persistent SessionStore backend requires Jensen's input before James can implement."

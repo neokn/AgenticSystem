@@ -1,0 +1,75 @@
+title: "Session 持久化採用 GFS 分層保留策略：時/日/週/月/季/年"
+assignee: unassigned
+labels:
+  - backend
+  - core-logic
+  - architecture
+history:
+  - stage: backlog
+    at: 2026-03-22T21:35:00+08:00
+description: |
+  目前 session 是純 in-memory，對話結束即消失。需要實作持久化並採用
+  GFS (Grandfather-Father-Son) 分層保留策略管理歷史 session 資料。
+
+  ## 切分規則（全部以 UTC 時間計算）
+
+  | 層級 | 切分點 | 說明 |
+  |------|--------|------|
+  | 時 Hourly | 整點 (00:00, 01:00, ...) | 原始對話記錄 |
+  | 日 Daily | UTC 00:00 跨日 | 壓縮為每小時摘要 |
+  | 週 Weekly | 週日為第一天（Sunday UTC 00:00） | 壓縮為每日摘要 |
+  | 月 Monthly | 日曆月邊界（每月 1 日 UTC 00:00） | 壓縮為每週摘要 |
+  | 季 Quarterly | Q1=1-3月, Q2=4-6月, Q3=7-9月, Q4=10-12月 | 壓縮為每月摘要 |
+  | 年 Yearly | 日曆年邊界（1月1日 UTC 00:00） | 壓縮為每季摘要 |
+
+  ## 保留策略（比較時間點需求）
+
+  除了「當前」的資料外，以下「前一個」週期的資料必須額外保留，
+  因為隨時可能需要做時間點比較：
+
+  | 比較需求 | 保留規則 |
+  |----------|----------|
+  | 昨天 | 保留前一天的全部 24 筆 hourly 資料 |
+  | 上週 | 保留前一週的全部 daily 資料 |
+  | 上月 | 保留前一月的全部 weekly 資料 |
+  | 上季 | 保留前一季的全部 monthly 資料 |
+  | 去年 | 保留前一年的全部 quarterly 資料 |
+  | 去年同日 | 保留去年每天的 daily 資料 |
+
+  ## Session 重啟載入
+
+  重新啟動 session 時，載入的原始對話和 memory 壓縮的 turn 數量
+  沿用現有算法：TurnsToKeep = ContextWindowTokens / MaxOutputTokens。
+  持久化層負責提供「最近的原始 turns + 各層 tier summaries」，
+  組裝邏輯與現有的 buildCompressedContents 一致。
+
+  ## 前置依賴
+
+  需要先有 session 持久化基礎設施（儲存後端選型）。
+  現有的 in-memory 壓縮（SubSession + fork-based handover）處理
+  「單一對話內」的 context window 管理，與此卡片的「跨對話歷史」
+  保留是不同層次。
+
+tasks:
+  - text: "設計 SessionStore 介面：Save / Load / List / Delete / QueryByTimeRange"
+    done: false
+  - text: "選型持久化後端（SQLite / file-based / 其他）"
+    done: false
+  - text: "設計 GFS tier 資料模型：tier 標記、UTC 切分時間戳、retention flag"
+    done: false
+  - text: "實作 UTC 切分點計算：hourly 整點、daily 跨日、weekly 週日、monthly 日曆月、quarterly Q1-Q4、yearly 日曆年"
+    done: false
+  - text: "實作保留策略：前一天/前一週/前一月/前一季/前一年/去年同日的資料標記為 retained 不被清理"
+    done: false
+  - text: "實作 tier 晉升排程：掃描已存 session，過期的 hourly 壓縮成 daily，依此類推"
+    done: false
+  - text: "實作跨 tier 壓縮：用 fork-based handover 將多個同 tier session 壓縮成上層 summary"
+    done: false
+  - text: "實作 session 重啟載入：從持久化層取出原始 turns + tier summaries，用 TurnsToKeep 算法組裝 context"
+    done: false
+  - text: "測試：模擬跨日/跨週/跨月邊界的 session，驗證切分、晉升、保留、清理行為"
+    done: false
+  - text: "測試：驗證去年同日保留策略正確保留 365 天前的 daily 資料"
+    done: false
+
+comments: []

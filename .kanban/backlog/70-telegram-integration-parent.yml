@@ -1,0 +1,39 @@
+title: Telegram Bot 接入
+assignee: neokn
+labels:
+  - backend
+  - integration
+history:
+  - stage: backlog
+    at: 2026-03-22T20:50:00+08:00
+  - stage: in-progress
+    at: "2026-03-22T21:00:00+08:00"
+  - stage: refined
+    at: "2026-03-22T22:00:00+08:00"
+description: |
+  將 AgenticSystem 的 demo agent 接上 Telegram Bot，讓使用者可以
+  透過 Telegram 與 agent 對話。MemoryPlugin 的壓縮功能需要在
+  Telegram 長對話中正常運作。
+
+  需要評估：
+  - 使用 Telegram Bot API（go-telegram-bot-api 或類似套件）
+  - Session 管理：每個 Telegram chat 對應一個 ADK session
+  - 訊息格式轉換：Telegram markdown ↔ Gemini content
+  - Webhook vs Long Polling 的選擇
+tasks:
+  - text: 調研 Go Telegram Bot 套件選型
+    done: false
+  - text: 設計 Telegram ↔ ADK 的 message adapter
+    done: false
+  - text: 實作 cmd/telegram/main.go 入口
+    done: false
+  - text: Session 管理（chat ID → ADK session mapping）
+    done: false
+  - text: 端對端測試：多輪對話 + 壓縮觸發
+    done: false
+comments:
+  - author: jules
+    at: "2026-03-22T22:00:00+08:00"
+    text: 'Story too large: 5 tasks span 4 independent concerns (library research, message adapter, bot entrypoint, session management, e2e). Applied Slice the Hamburger strategy. Split into 3 sub-stories: 10a (session store + message adapter — pure logic, no network), 10b (Telegram bot Long Polling — the MVP feature), 10c (webhook + production hardening — capacity improvement). Each sub-story delivers independent value and can ship separately. Original card retained as parent reference.'
+completed-by:
+  backlog: jules

@@ -1,0 +1,58 @@
+title: "Shell Tool 危險指令人工核准閘道"
+assignee: neokn
+labels:
+  - backend
+  - core-logic
+depends-on:
+  - 20b-shell-tool-core-execution
+history:
+  - stage: backlog
+    at: 2026-03-22T20:50:00+08:00
+  - stage: refined
+    at: 2026-03-22T00:00:00+08:00
+description: |
+  在 shell execution tool 上疊加人工核准機制：當 LLM 請求執行「危險指令分類」
+  （依 20a spike 定義）時，暫停執行並向使用者呈現指令內容請求確認，
+  僅在使用者明確核准後才執行。
+
+  依賴 20b 已完成的核心 tool 實作，以及 20a 定義的危險指令分類清單。
+
+  價值：讓 agent 具備破壞性操作能力的同時維持人類監督，符合 AI safety 最佳實踐。
+
+acceptance:
+  - given: LLM 請求執行被分類為危險的指令（例如 rm -rf、kill、chmod 777）
+    when: tool 收到該指令
+    then: tool 不執行指令，改為向使用者呈現指令字串與風險說明，並等待核准或拒絕；等待期間 agent 不繼續後續工具呼叫
+  - given: 使用者收到危險指令確認請求
+    when: 使用者在 30 秒內明確回覆「核准」
+    then: tool 執行指令並按 20b 的方式回傳結果；執行紀錄包含「人工核准」旗標與核准時間戳
+  - given: 使用者收到危險指令確認請求
+    when: 使用者回覆「拒絕」或 30 秒內無回應
+    then: tool 回傳 error 欄位值為 "user rejected" 或 "approval timeout"，不執行任何系統呼叫；agent 收到此錯誤後應向使用者說明操作未執行
+  - given: 核准等待期間 agent 收到另一個危險指令請求
+    when: 上一個請求仍在等待確認
+    then: 新請求被佇列化或拒絕（不得同時存在兩個等待核准的請求），並回傳明確錯誤訊息
+  - given: 危險指令判斷規則設定錯誤（分類清單為空）
+    when: tool 初始化
+    then: tool 啟動失敗並記錄設定錯誤，不以「全部允許」或「全部拒絕」作為 fallback 行為
+
+tasks:
+  - text: "依 20a 輸出建立危險指令分類規則（設定檔驅動，不硬編碼）"
+    done: false
+  - text: "實作核准請求流程：暫停執行、呈現指令、等待回應"
+    done: false
+  - text: "實作 30 秒等待 timeout 與拒絕邏輯"
+    done: false
+  - text: "在執行紀錄中附加人工核准旗標與時間戳"
+    done: false
+  - text: "單元測試：核准路徑、拒絕路徑、timeout 路徑、並發請求處理"
+    done: false
+
+comments:
+  - author: jules
+    at: 2026-03-22T00:00:00+08:00
+    text: |
+      拆分自 20-shell-tool-for-llm（原卡）。
+      此卡專注於人類監督機制，是獨立可部署的增量功能（20b 上線後可暫時不部署此卡）。
+      採用 Strategy 4（Split by Examples of Usefulness）：
+      先有可用的安全工具（20b），再疊加人工監督（20c）。

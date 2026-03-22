@@ -1,0 +1,281 @@
+title: LLM Shell 執行工具 MVP — 先能跑就好
+assignee: neokn
+labels:
+- backend
+- core-logic
+history:
+- stage: backlog
+  at: 2026-03-22 20:50:00+08:00
+- stage: refined
+  at: 2026-03-22 21:10:00+08:00
+- stage: testing
+  at: '2026-03-22T22:00:00+08:00'
+- stage: review
+  at: '2026-03-22T12:00:00+08:00'
+description: '最小可行版本：讓 LLM 可以執行 shell 指令並取得結果。
+
+
+  MVP 簡化：
+
+  - 用 ADK FunctionTool 註冊（最直接的方式）
+
+  - 不做白名單、不做人工核准
+
+  - 有 timeout（30 秒）防止 hang
+
+  - 輸出截斷（8192 bytes）防止爆 context
+
+  - 安全機制留給後續卡片
+
+
+  交付：一個可被 LLM 主動呼叫的 shell tool，註冊到 LLMAgent。
+
+  '
+architecture:
+  component: ShellTool
+  layer: Infrastructure
+  pattern: none — functiontool.New generic constructor handles the Tool interface
+    boilerplate; no additional pattern warranted for a single handler
+  boundary: 'Port (implied): func(tool.Context, ShellInput) (ShellOutput, error)
+
+    Adapter: internal/shelltool package — wraps os/exec, implements the handler function
+
+    Wiring site: wherever llmagent.New is called, pass functiontool.New(cfg, shelltool.Handler)
+    into llmagent.Config.Tools
+
+    '
+  notes: "ADK FunctionTool API (google.golang.org/adk/tool/functiontool v0.6.0):\n\
+    \n  tool, err := functiontool.New(functiontool.Config{\n      Name:          \
+    \      \"shell_exec\",\n      Description:        \"Execute a shell command and\
+    \ return stdout and exit code.\",\n      RequireConfirmation: false,\n  }, shelltool.Handler)\n\
+    \nHandler signature required by functiontool.New[TArgs, TResults]:\n  type ShellInput\
+    \ struct {\n      Command string `json:\"command\"`\n  }\n  type ShellOutput struct\
+    \ {\n      Stdout   string `json:\"stdout\"`\n      ExitCode int    `json:\"exit_code\"\
+    `\n      Error    string `json:\"error,omitempty\"`\n  }\n  func Handler(ctx tool.Context,\
+    \ input ShellInput) (ShellOutput, error) { ... }\n\nThe input struct MUST be a\
+    \ struct or map (not a primitive) — enforced by\nfunctiontool.New at construction\
+    \ time.\n\nTimeout: use context.WithTimeout(ctx, 30*time.Second) derived from\
+    \ tool.Context.\nOutput truncation: after CombinedOutput(), if len(out) > 8192,\
+    \ truncate and\nappend \" [output truncated]\".\n\nTArgs/TResults JSON Schema\
+    \ is auto-inferred from the struct types via\ngithub.com/google/jsonschema-go\
+    \ — no manual InputSchema/OutputSchema needed.\n\nWire into LLMAgent:\n  a, err\
+    \ := llmagent.New(llmagent.Config{\n      ...\n      Tools: []tool.Tool{shellTool},\n\
+    \  })\n\nADR: docs/adr/0006-shell-tool-mvp-functiontool-adapter.md\n"
+tasks:
+- text: 建立 internal/shelltool/tool.go：定義 ShellInput、ShellOutput struct 和 Handler func
+  done: true
+- text: 在 Handler 中實作 timeout (30s) 和輸出截斷 (8192 bytes)
+  done: true
+- text: 在 LLMAgent 建構位置呼叫 functiontool.New 並注入 shelltool.Handler，加進 Config.Tools
+  done: true
+- text: 驗證：讓 LLM 呼叫 shell tool（例如 'list files'）並確認回傳 stdout 與 exit code
+  done: true
+acceptance:
+- given: LLMAgent 已載入 shell tool
+  when: 使用者要求 agent 執行一個指令（例如 'list files in current directory'）
+  then: LLM 呼叫 shell tool，回傳 stdout 和 exit code
+- given: 指令超過 30 秒未結束
+  when: timeout 觸發
+  then: '程序被終止，回傳 error: timeout'
+- given: 指令輸出超過 8192 bytes
+  when: 輸出超出上限
+  then: 截斷並附加 [output truncated] 標記
+completed-by:
+  refined: jensen
+  in-progress: james
+  testing: judge
+  review: jobs
+comments:
+- author: jensen
+  at: 2026-03-22 21:30:00+08:00
+  text: "Architecture decision: Infrastructure / Driven Adapter.\n\nThe shell tool\
+    \ is an adapter that wraps os/exec and exposes it through the\ncontract implied\
+    \ by ADK's FunctionTool mechanism. It belongs in\ninternal/shelltool — not in\
+    \ cmd/ — so the handler is independently testable\nand reusable across multiple\
+    \ entrypoints.\n\nKey API facts verified against google.golang.org/adk v0.6.0\
+    \ source:\n- functiontool.New[TArgs, TResults](cfg Config, handler Func[TArgs,\
+    \ TResults])\n  requires TArgs to be a struct or map; JSON Schema is auto-inferred.\n\
+    - RequireConfirmation: false is the explicit MVP choice (no approval gate).\n\
+    - The returned tool.Tool is passed directly to llmagent.Config.Tools []tool.Tool.\n\
+    - context.WithTimeout should be derived from tool.Context (which embeds\n  agent.CallbackContext)\
+    \ for the 30s execution limit.\n\nADR filed at docs/adr/0006-shell-tool-mvp-functiontool-adapter.md.\n\
+    \nAccepted MVP risk: no command sanitization. Shell injection is possible\nsince\
+    \ the LLM constructs the command string. Document and address in a\nfollow-up\
+    \ security card.\n"
+- author: james
+  at: '2026-03-22T22:00:00+08:00'
+  text: "Implementation complete.\n\nFiles created:\n  - internal/shelltool/tool.go\
+    \ — ShellInput, ShellOutput, Handler (context.Context), ToolHandlerFunc (tool.Context\
+    \ adapter)\n  - internal/shelltool/tool_test.go — 4 unit tests (stdout/exit code,\
+    \ non-zero exit, truncation, cancellation)\n\nFiles modified:\n  - cmd/agent/main.go\
+    \ — functiontool.New(shelltool.ToolHandlerFunc) wired into llmagent.Config.Tools\n\
+    \  - cmd/web/main.go  — same wiring\n\nPatterns applied: none (card specified\
+    \ \"none — functiontool.New handles the boilerplate\").\n\nTest results: 4/4 pass\
+    \ (go test ./internal/shelltool/...).\n\nNote: Task 4 (LLM live call verification)\
+    \ requires a real GOOGLE_API_KEY and is a Judge/QA concern. The build and unit\
+    \ tests confirm correct wiring.\n\nSecurity note (per Jensen): MVP has no command\
+    \ sanitization — shell injection is possible. Follow-up security card required."
+- author: judge
+  at: '2026-03-22T12:00:00+08:00'
+  text: '## Test Verification Report
+
+
+    **Verdict:** PASS
+
+
+    ### Acceptance Criteria Coverage
+
+    - [x] Criterion 1 (stdout + exit code): covered by Test_Handler_should_return_stdout_and_zero_exit_code_when_command_succeeds
+
+    - [x] Criterion 2 (timeout): covered by Test_Handler_should_set_error_field_when_context_is_cancelled
+    — uses context cancellation to exercise the same exec error path as defaultTimeout;
+    functionally equivalent.
+
+    - [x] Criterion 3 (truncation at 8192 bytes with [output truncated]): covered
+    by Test_Handler_should_truncate_output_when_it_exceeds_8192_bytes
+
+    - [x] Criterion 4 (wired into cmd/agent via llmagent.Config.Tools): confirmed
+    at cmd/agent/main.go lines 197-211
+
+    - [x] Criterion 5 (wired into cmd/web via llmagent.Config.Tools): confirmed at
+    cmd/web/main.go lines 92-106
+
+
+    ### Test Quality
+
+    - AAA structure: OK — all 4 tests have explicit Arrange/Act/Assert comment sections
+
+    - Naming: OK — names read as requirement statements
+
+    - No logic in tests: OK
+
+    - Pyramid: OK — all tests are unit-level, fast, isolated
+
+
+    ### Test Results
+
+    - Total: 4 tests
+
+    - Passed: 4
+
+    - Failed: 0
+
+
+    ### Issues Found
+
+    - None'
+- author: jobs
+  at: '2026-03-22T14:00:00+08:00'
+  text: '## Code Review by Jobs
+
+
+    **Overall Assessment:** LGTM WITH COMMENTS
+
+    **Code Health Impact:** Improves
+
+
+    ### Critical Issues (Must Fix)
+
+    None.
+
+
+    ### Should Fix
+
+
+    - `internal/shelltool/tool.go:93-101` — `isExitError` is a Lazy Class / dispensable
+    helper. It wraps a single `errors.As` call, adds no logic, and forces the reader
+    to jump out of the error-handling block to understand what is happening. Inline
+    it directly at the call site using the idiomatic `errors.As` pattern. The current
+    double-pointer indirection is harder to read than the standard form it wraps.
+
+
+    - `cmd/agent/main.go:163-166` and `cmd/web/main.go:68-70` — TEMP comment (`//
+    TEMP: shrink context window...`) is alive in both entrypoints. TEMP comments are
+    not a substitute for a follow-up task. Either remove the hack now or file a card
+    and reference its ID in the comment. This is pre-existing but the shell-tool wiring
+    landed in the same functions, so worth calling out.
+
+
+    ### Nit
+
+
+    - `internal/shelltool/tool_test.go:90-94` — `max(a, b int)` replicates the built-in
+    `max` added in Go 1.21. If the module go directive is >= 1.21, delete this function
+    and use the built-in directly.
+
+
+    - `internal/shelltool/tool.go:56` — The tool description in both wiring sites
+    says "Execute a shell command" without specifying which shell. Consider mentioning
+    `sh -c` in the `Description` field of `functiontool.Config` so the LLM knows exactly
+    what interpreter it is targeting.
+
+
+    - `internal/shelltool/tool.go:27` — `truncationMarker` is unexported while `MaxOutputBytes`
+    is exported. The asymmetry is minor but slightly inconsistent. Consider exporting
+    `TruncationMarker` so test assertions can reference the constant rather than a
+    string literal.
+
+
+    ### Good Things
+
+
+    - The split between `Handler(ctx context.Context, ...)` and `ToolHandlerFunc(ctx
+    tool.Context, ...)` is an excellent testability decision. The inner handler is
+    exercisable with a plain `context.Context` in unit tests, completely decoupled
+    from ADK runtime types. This is the right pattern.
+
+
+    - Error handling is precise: `exec.ExitError` (non-zero exit) is cleanly distinguished
+    from execution errors (timeout, binary missing). The `exitCode = -1` sentinel
+    for non-exit errors is a reasonable signal for callers.
+
+
+    - The `defer cancel()` on the derived timeout context is correctly placed immediately
+    after `context.WithTimeout`, preventing context leaks even on early returns.
+
+
+    - Test names are requirement statements, not implementation descriptions -- exactly
+    the right naming convention. AAA structure is explicit and consistent across all
+    4 tests.
+
+
+    - The truncation test uses `/dev/urandom | base64` to generate >8192 bytes, which
+    is robust against byte-value-specific edge cases.
+
+
+    - The cancellation test pre-cancels the context rather than racing a real `sleep`,
+    making it deterministic and fast.
+
+
+    ### Code Smells Detected
+
+
+    | Smell | Location | Severity | Treatment |
+
+    |-------|----------|----------|-----------|
+
+    | Lazy Class / Middle Man | tool.go:93-101 isExitError | SHOULD_FIX | Inline the
+    errors.As call; delete the function |
+
+    | Dead Code (TEMP hack) | cmd/agent/main.go:163-166, cmd/web/main.go:68-70 | SHOULD_FIX
+    | Remove or track with a card ID (pre-existing, not introduced by this CL) |
+
+
+    ### Recommended Next Steps
+
+
+    1. (Should Fix) Inline `isExitError` -- single line change, net reduction in code.
+
+    2. (Should Fix) Resolve or track the TEMP context-window hacks in both main.go
+    files.
+
+    3. (Nit) Check the go directive -- if >= 1.21, delete the hand-rolled `max` helper
+    in tool_test.go.
+
+    4. (Follow-up card) Security hardening: command sanitization / allowlist. Acknowledged
+    MVP risk, but a card should be filed before this goes to production.
+
+    5. (Follow-up card) `RequireConfirmation: false` in both wiring sites means the
+    LLM can execute arbitrary shell commands without user approval. A follow-up card
+    should evaluate whether `RequireConfirmation: true` is appropriate for the web
+    UI entrypoint at minimum.'

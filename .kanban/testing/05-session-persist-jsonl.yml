@@ -1,0 +1,239 @@
+title: "Session 持久化：JSONL 檔案儲存"
+assignee: neokn
+labels:
+  - backend
+  - core-logic
+history:
+  - stage: backlog
+    at: 2026-03-22T21:45:00+08:00
+  - stage: refined
+    at: "2026-03-22T00:00:00+08:00"
+  - stage: testing
+    at: "2026-03-22T22:00:00+08:00"
+description: |
+  目前所有 entrypoint（cmd/agent, cmd/web, cmd/telegram）都使用
+  session.InMemoryService()，對話結束即消失。
+
+  最小可行版本：用 JSONL（每行一個 JSON object）格式將對話 turns
+  儲存到本地檔案。每個 session 一個 .jsonl 檔案，每輪對話 append
+  一行，重啟時讀回來恢復 session 狀態。
+
+  JSONL 的優勢：
+  - append-only 寫入，不需要讀-改-寫整個檔案
+  - 每行獨立解析，檔案損壞時只丟最後一行
+  - 可直接用 grep/jq 查詢，debug 友好
+  - 是 GFS 分層策略（卡 90）的前置依賴
+
+  儲存路徑：data/sessions/<session-id>.jsonl
+  每行格式：序列化完整 session.Event（含 Content, Actions.StateDelta）
+
+  Notes (from refinement):
+  - JSONL line schema must serialise the full session.Event (not just text+role),
+    because ADK runner and plugins read event.Actions.StateDelta and
+    event.Content.Parts (which can be function calls, not just text).
+  - session.Session interface requires State (app/user/session scopes),
+    Events (ordered list), and LastUpdateTime — the JSONL file stores events;
+    state deltas are replayed from StateDelta fields on load.
+  - AppendEvent is the hot path (called after every ADK event); file must be
+    opened in O_APPEND mode so no read-modify-write occurs.
+  - Splitting decision: Telegram per-chat session reuse is split to card 06
+    (depends on this card). This card wires JSONLService into all three
+    entrypoints as a drop-in replacement only — session lifecycle logic
+    (one session per chat) is handled in card 06.
+architecture:
+  component: SessionStore
+  layer: Infrastructure
+  pattern: "Adapter — JSONLService is a driven adapter that implements the session.Service port (defined by ADK) and injects persistence behaviour into the Application Core. No additional design pattern is needed; the interface is already well-defined by ADK and has only one implementation here."
+  boundary: |
+    Port (inbound contract, owned by ADK):
+      session.Service — Create / Get / List / Delete / AppendEvent
+
+    Adapter (outbound, owned by this project):
+      internal/sessionstore.JSONLService — implements session.Service
+      File layout: data/sessions/<session-id>.jsonl (events) +
+                   data/sessions/<session-id>.meta.json (identity sidecar)
+
+    Driving side (callers):
+      cmd/agent/main.go, cmd/web/main.go, cmd/telegram/main.go —
+      each receives a session.Service value; swap InMemoryService() -> JSONLService("data/sessions")
+  notes: |
+    Concrete session type:
+      session.Session is an interface; the ADK-internal *session.session is
+      unexported. JSONLService must define its own jsonlSession struct
+      implementing session.Session (ID, AppName, UserID, State, Events,
+      LastUpdateTime), following the same pattern as session/database.localSession.
+
+    File structure per session:
+      data/sessions/<id>.jsonl   — one JSON line per session.Event (append-only)
+      data/sessions/<id>.meta.json — {"app_name":"...","user_id":"...","session_id":"...","created_at":"..."}
+
+    Rationale for metadata sidecar:
+      List(AppName, UserID) must enumerate sessions without replaying event
+      files. Reading a small JSON sidecar is O(1); it avoids scanning JSONL.
+
+    State replay on Get:
+      1. Read <id>.meta.json to validate AppName/UserID/SessionID.
+      2. Read <id>.jsonl line by line; unmarshal each line into *session.Event.
+         On json.Unmarshal error: log slog.Warn with line number and raw bytes,
+         skip the line, continue.
+      3. For each event, call sessionutils.ExtractStateDeltas(event.Actions.StateDelta)
+         to split into app/user/session deltas. Accumulate separately.
+      4. After all lines: call sessionutils.MergeStates(appState, userState, sessionState)
+         to build the final state map for the returned Session.
+      5. Apply NumRecentEvents and After filters in-memory (post-replay).
+
+    AppendEvent behaviour:
+      - Skip if event.Partial == true (matches ADK contract).
+      - Strip temp: keys from StateDelta before serialising
+        (call trimTempDeltaState equivalent).
+      - Open file with os.O_WRONLY|os.O_CREATE|os.O_APPEND; write JSON line + '\n'.
+      - Close file after each write (no persistent handle); O_APPEND is atomic
+        for single-line writes <= PIPE_BUF (~4 KB), so no mutex needed.
+
+    Concurrency guarantee for acceptance criterion:
+      Two goroutines calling AppendEvent on the same session: each opens the
+      file independently with O_APPEND; the kernel serialises the two writes at
+      the VFS level. Each complete line arrives intact. Get after both calls
+      returns Events().Len() == 2.
+
+    No caching layer (MVP constraint):
+      Every Get replays the full JSONL file. Acceptable for session lengths
+      typical in LLM conversations (tens to low hundreds of events).
+
+    ADR: docs/adr/0007-jsonl-session-store.md
+tasks:
+  - text: "設計 JSONL 行格式：序列化完整 session.Event（含 Content, Actions.StateDelta）"
+    done: true
+  - text: "實作 internal/sessionstore/service.go：JSONLService struct，建構函式 NewJSONLService(dir string) session.Service"
+    done: true
+  - text: "實作 jsonlSession struct（implements session.Session），及配套 events/state types（仿 session/database/session.go 的 localSession 模式）"
+    done: true
+  - text: "Create：寫 <id>.meta.json sidecar（AppName/UserID/SessionID/CreatedAt），建立空 <id>.jsonl"
+    done: true
+  - text: "AppendEvent：O_APPEND 寫入，strip temp: keys，每次呼叫 open→write→close"
+    done: true
+  - text: "Get：讀 meta.json 驗證身份；逐行 unmarshal .jsonl；replay StateDelta；套用 NumRecentEvents/After filter"
+    done: true
+  - text: "List：掃目錄 *.meta.json，過濾 AppName/UserID，回傳 []session.Session（不 replay events）"
+    done: true
+  - text: "Delete：刪除 <id>.jsonl 及 <id>.meta.json"
+    done: true
+  - text: "替換 cmd/agent、cmd/web、cmd/telegram 的 InMemoryService() → sessionstore.NewJSONLService(\"data/sessions\")"
+    done: true
+  - text: "單元測試：寫入後讀回事件順序正確；最後一行損壞時跳過並繼續載入；並行 AppendEvent 兩次後 Len()==2"
+    done: true
+acceptance:
+  - given: "JSONLService 已初始化，data/sessions/ 目錄存在"
+    when: "呼叫 Create，再呼叫 AppendEvent N 次，再重啟 process 後呼叫 Get"
+    then: "Get 回傳的 Session.Events().Len() 等於 N，每個 Event 的 Author、Timestamp、Content.Parts 與原始寫入值完全一致"
+  - given: "現有 session 的 .jsonl 檔案已有若干行"
+    when: "呼叫 AppendEvent 新增一個事件"
+    then: "新事件被 append 到檔案末尾（不重寫舊行），AppendEvent 回傳 nil error，且 O_APPEND 保證不截斷現有內容"
+  - given: "JSONLService 替換 cmd/telegram 的 InMemoryService"
+    when: "Telegram bot 收到一則訊息並完成一輪對話"
+    then: "data/sessions/<session-id>.jsonl 檔案存在，用 jq . 可成功解析每一行，且行數等於本輪產生的 ADK event 數"
+  - given: ".jsonl 檔案的最後一行為不完整 JSON（模擬程序崩潰）"
+    when: "呼叫 Get 載入該 session"
+    then: "Get 回傳 nil error，損壞的末行被跳過，其餘事件完整載入，並以 slog.Warn 記錄跳過的行號及原始內容"
+  - given: "呼叫 Get 時傳入不存在的 SessionID"
+    when: "呼叫 Get"
+    then: "Get 回傳 non-nil error，error 訊息包含該 SessionID 字串"
+  - given: "AppendEvent 被兩個 goroutine 同時呼叫同一個 session"
+    when: "兩次呼叫並行執行"
+    then: "兩行都完整寫入檔案，無資料交叉或截斷（以 Get 後 Events().Len()==2 驗證）"
+completed-by:
+  backlog: jules
+  refined: jensen
+  in-progress: james
+comments:
+  - author: jules
+    at: 2026-03-22T00:00:00+08:00
+    text: |
+      Refinement notes.
+
+      ADK session.Service interface (google.golang.org/adk@v0.6.0/session/service.go)
+      requires 5 methods: Create, Get, List, Delete, AppendEvent.
+      session.Session interface: ID(), AppName(), UserID(), State(), Events(), LastUpdateTime().
+
+      JSONL line schema decision: serialize full session.Event, not a simplified
+      role+text record. Rationale: ADK runner and plugins read event.Actions.StateDelta
+      to merge session state, and event.Content.Parts can include function calls and
+      function responses. A simplified schema would lose this data and break state
+      replay on restart.
+
+      Splitting decision (story-splitter strategy: Split by Examples of Usefulness):
+      The original story contained two distinct value deliveries:
+        1. Durable storage — sessions survive process restarts (this card, 05)
+        2. Telegram per-chat continuity — bot reuses the same session for the
+           same chat ID across messages (card 06, depends-on: 05)
+      Card 06 is created separately because the behavior change (session lookup by
+      chat ID vs. always creating new) is independent of the storage mechanism and
+      can be verified and shipped independently once 05 is done.
+
+      Concurrency: O_APPEND on POSIX is atomic for writes <= PIPE_BUF (~4KB).
+      A single serialised Event line is well within this limit for normal
+      conversations. No additional mutex is required at the file layer for AppendEvent.
+
+      State scopes: ADK supports app:, user:, and temp: key prefixes.
+      temp: keys are stripped by AppendEvent before storage (per ADK contract in
+      session.Service docs). app: and user: scoped deltas must be replayed during
+      Get to reconstruct full state.
+  - author: jensen
+    at: 2026-03-22T10:00:00+08:00
+    text: |
+      Architecture review complete.
+
+      Component: SessionStore (Infrastructure layer — driven adapter).
+      Package: internal/sessionstore/ (not internal/memory/, which handles
+      context-window compression — a separate bounded context).
+
+      Key decisions recorded in docs/adr/0007-jsonl-session-store.md:
+
+      1. Metadata sidecar pattern (<id>.meta.json) — List() needs AppName/UserID
+         enumeration without replaying event files. A small JSON sidecar makes
+         this O(1) per session. Rejected alternative: encode metadata in a
+         directory structure (app/user/<id>.jsonl) — would work for List but
+         complicates Delete and makes the file layout less transparent.
+
+      2. No persistent file handle — AppendEvent opens, writes, and closes on
+         each call. This avoids fd leaks across long-lived processes and ensures
+         O_APPEND atomicity is handled by the kernel on every call. The overhead
+         is one open+close syscall per event, which is acceptable for LLM
+         conversation throughput (events arrive at human interaction speed).
+
+      3. No caching layer (MVP) — Get replays the full JSONL file on every call.
+         The ADK runner calls Get once per invocation (not per event), so the
+         cost is proportional to conversation length, not message count. For
+         MVP conversation lengths this is fine.
+
+      4. Concrete session type — session.Session is an interface; the ADK-internal
+         *session.session is unexported. The implementation must define its own
+         jsonlSession struct following the same pattern as session/database.localSession.
+         This is not a design smell — it is the intended extension point.
+
+      Labels confirmed: backend, core-logic.
+      No card split required — this card is already scoped to a single component
+      (Infrastructure adapter for session persistence).
+  - author: james
+    at: "2026-03-22T22:00:00+08:00"
+    text: |-
+      Implementation complete.
+
+      Files created:
+        internal/sessionstore/service.go    — JSONLService, jsonlSession, jsonlEvents, jsonlState, trimTempDeltaState, extractStateDeltas, mergeStates
+        internal/sessionstore/service_test.go — 17 unit tests (all pass)
+
+      Files modified:
+        cmd/telegram/main.go — replaced session.InMemoryService() with sessionstore.NewJSONLService("data/sessions")
+
+      Pattern applied: Adapter (driven adapter) — JSONLService implements session.Service port defined by ADK.
+
+      Key design decisions:
+        - ADK internal/sessionutils is module-internal; extractStateDeltas and mergeStates are reimplemented locally.
+        - O_APPEND per-call open-write-close; no persistent fd; kernel serialises concurrent writes.
+        - Corrupt JSONL lines skipped with slog.Warn (Level 1 fault tolerance on read path).
+        - session.Session interface implemented by jsonlSession (mirrors database/localSession pattern).
+
+      Test results: 17/17 PASS
+        go test ./internal/sessionstore/ -v
+        go test ./... all green

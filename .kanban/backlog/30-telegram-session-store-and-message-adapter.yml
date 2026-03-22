@@ -1,0 +1,65 @@
+title: "Telegram Session Store and Message Adapter"
+assignee: ""
+labels:
+  - backend
+  - integration
+history:
+  - stage: backlog
+    at: 2026-03-22T22:00:00+08:00
+description: |
+  Implement two foundational components required by the Telegram Bot integration,
+  with no dependency on any live Telegram connection:
+
+  1. SessionStore: maps Telegram chat IDs to ADK session IDs. Persists the
+     mapping in-memory (with a documented interface so a persistent backend can
+     be swapped in later). Each unique chat ID gets exactly one ADK session for
+     the lifetime of the process.
+
+  2. MessageAdapter: converts a Telegram message text into a *genai.Content
+     (genai.RoleUser) suitable for runner.Run, and converts the agent's plain-text
+     response back to a Telegram-safe string (stripping unsupported markdown
+     that would cause Telegram parse errors).
+
+  Both components must be unit-testable in isolation using table-driven tests.
+  No Telegram Bot API dependency is required in this story — just the adapter
+  interface and the session store.
+
+  Value: unblocks story 10b; provides a tested, mockable boundary between
+  Telegram protocol concerns and ADK concerns.
+
+  Trade-off: the SessionStore is in-memory only — data is lost on restart.
+  Persistent storage is deferred to a follow-up story.
+
+tasks:
+  - text: "Define SessionStore interface and in-memory implementation (internal/telegram/session.go)"
+    done: false
+  - text: "Implement MessageAdapter: Telegram text -> *genai.Content"
+    done: false
+  - text: "Implement MessageAdapter: agent response text -> Telegram-safe string"
+    done: false
+  - text: "Table-driven unit tests for SessionStore (new chat ID, existing chat ID, concurrent access)"
+    done: false
+  - text: "Table-driven unit tests for MessageAdapter (plain text, markdown edge cases)"
+    done: false
+
+acceptance:
+  - given: "A SessionStore is initialized and a Telegram chat ID has never been seen before"
+    when: "GetOrCreate(chatID) is called"
+    then: "A new ADK session ID is returned and stored; a second call with the same chatID returns the identical session ID"
+  - given: "Two goroutines simultaneously call GetOrCreate with different chat IDs"
+    when: "Both calls complete"
+    then: "Each goroutine receives its own distinct session ID; no data race is detected (go test -race passes)"
+  - given: "A Telegram message text of 'Hello!' is passed to the MessageAdapter"
+    when: "ToGenaiContent(text) is called"
+    then: "The returned *genai.Content has Role == genai.RoleUser and Parts[0].Text == 'Hello!'"
+  - given: "An agent response containing Telegram-unsupported markdown (e.g. triple-backtick code blocks)"
+    when: "ToTelegramText(response) is called"
+    then: "The returned string contains no triple-backtick sequences and the semantic content is preserved"
+  - given: "An empty string is passed to ToGenaiContent"
+    when: "ToGenaiContent('') is called"
+    then: "An error is returned (empty message is rejected before reaching the ADK runner)"
+
+comments:
+  - author: jules
+    at: 2026-03-22T22:00:00+08:00
+    text: "Split from parent card 10-telegram-integration. This is story 10a — foundational logic with no live dependencies. Depends on nothing. Unblocks 10b."
