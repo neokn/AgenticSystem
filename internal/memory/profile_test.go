@@ -158,6 +158,58 @@ func TestGetProfile_ReturnsBuiltin_Gemini25Flash(t *testing.T) {
 	}
 }
 
+// Task 4: Custom profile override
+
+func TestNewRegistry_CustomProfileOverridesBuiltin_WhenSameModelID(t *testing.T) {
+	// Arrange — custom profile for a built-in model with different token limit
+	custom := ModelProfile{
+		ModelID:             "gemini-2.0-flash",
+		Provider:            "google",
+		ContextWindowTokens: 500000,
+		MaxOutputTokens:     4096,
+	}
+
+	// Act
+	reg, err := NewRegistry(custom)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	p, err := reg.GetProfile("gemini-2.0-flash")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if p.ContextWindowTokens != 500000 {
+		t.Errorf("expected custom ContextWindowTokens 500000, got %d", p.ContextWindowTokens)
+	}
+}
+
+func TestNewRegistry_BuiltinProfilesStillAvailable_WhenOtherModelCustomised(t *testing.T) {
+	// Arrange — override only flash-lite, flash should remain unchanged
+	custom := ModelProfile{
+		ModelID:             "gemini-2.0-flash-lite",
+		Provider:            "google",
+		ContextWindowTokens: 200000,
+		MaxOutputTokens:     2048,
+	}
+
+	// Act
+	reg, err := NewRegistry(custom)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	// Assert — built-in flash unchanged
+	p, err := reg.GetProfile("gemini-2.0-flash")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if p.ContextWindowTokens != 1048576 {
+		t.Errorf("expected built-in ContextWindowTokens 1048576, got %d", p.ContextWindowTokens)
+	}
+}
+
 func TestModelProfile_PassedByValue_IsImmutable(t *testing.T) {
 	// Arrange — value object: modifying a copy does not affect original
 	original := ModelProfile{
