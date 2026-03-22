@@ -187,9 +187,9 @@ func Test_should_build_small_profile_for_oom_scenario(t *testing.T) {
 	}
 }
 
-// should_assemble_memory_plugin_dependencies verifies that all components
-// can be assembled using the dependency injection pattern from ADR-0003.
-// Uses stubs instead of real genai.Client (no API key needed).
+// should_assemble_memory_layout_with_default_config verifies that all memory
+// components assemble correctly using the dependency injection pattern from ADR-0003.
+// Assembles MemoryLayout using real memory types without a genai.Client — no API key required.
 func Test_should_assemble_memory_layout_with_default_config(t *testing.T) {
 	// Arrange
 	profile := memory.ModelProfile{

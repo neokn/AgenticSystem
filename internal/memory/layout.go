@@ -105,15 +105,27 @@ func NewLayout(profile ModelProfile, cfg LayoutConfig) (MemoryLayout, error) {
 
 		// Proportional weights among the three non-BUFFER segments.
 		otherTotal := pinned + summary + active
-		if otherTotal > 0 {
-			deductPinned  := int(float64(deficit) * float64(pinned)  / float64(otherTotal))
-			deductSummary := int(float64(deficit) * float64(summary) / float64(otherTotal))
-			deductActive  := deficit - deductPinned - deductSummary // floor+remainder
-
-			pinned  -= deductPinned
-			summary -= deductSummary
-			active  -= deductActive
+		if otherTotal == 0 {
+			// All three non-BUFFER segments floored to zero, which means the
+			// context window is so small that even before BUFFER auto-raise
+			// there is no capacity for pinned, summary, or active. This is an
+			// invalid profile configuration.
+			return MemoryLayout{}, fmt.Errorf(
+				"NewLayout: otherTotal (pinned+summary+active) is zero after floor calculation; "+
+					"non-buffer segments have no capacity (ContextWindowTokens=%d, MaxOutputTokens=%d)",
+				profile.ContextWindowTokens, profile.MaxOutputTokens,
+			)
 		}
+		deductPinned  := int(float64(deficit) * float64(pinned)  / float64(otherTotal))
+		deductSummary := int(float64(deficit) * float64(summary) / float64(otherTotal))
+		// deductActive absorbs the rounding remainder so that
+		// (deductPinned + deductSummary + deductActive) == deficit exactly,
+		// preventing any token from being lost or double-counted.
+		deductActive  := deficit - deductPinned - deductSummary
+
+		pinned  -= deductPinned
+		summary -= deductSummary
+		active  -= deductActive
 	}
 
 	// --- Minimum-capacity guard ---

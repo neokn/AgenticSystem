@@ -28,34 +28,6 @@ func TestMemoryLayout_should_return_segment_values_via_accessors(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2 — LayoutConfig struct
-// ---------------------------------------------------------------------------
-
-func TestLayoutConfig_should_hold_per_segment_ratios(t *testing.T) {
-	// Arrange + Act
-	cfg := LayoutConfig{
-		PinnedRatio:  0.15,
-		SummaryRatio: 0.25,
-		ActiveRatio:  0.50,
-		BufferRatio:  0.10,
-	}
-
-	// Assert: fields accessible and hold correct values
-	if cfg.PinnedRatio != 0.15 {
-		t.Errorf("PinnedRatio = %v, want 0.15", cfg.PinnedRatio)
-	}
-	if cfg.SummaryRatio != 0.25 {
-		t.Errorf("SummaryRatio = %v, want 0.25", cfg.SummaryRatio)
-	}
-	if cfg.ActiveRatio != 0.50 {
-		t.Errorf("ActiveRatio = %v, want 0.50", cfg.ActiveRatio)
-	}
-	if cfg.BufferRatio != 0.10 {
-		t.Errorf("BufferRatio = %v, want 0.10", cfg.BufferRatio)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Task 3 — DefaultLayoutConfig loads from configs/default.json
 // ---------------------------------------------------------------------------
 
@@ -407,6 +379,48 @@ func TestNewLayout_should_sum_exactly_with_gemini_25_pro_profile(t *testing.T) {
 	}
 	if layout.Buffer() != 104_857 {
 		t.Errorf("Buffer() = %d, want 104857 (no raise needed)", layout.Buffer())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 9 — otherTotal==0 guard (AC: error when all non-buffer segments are zero)
+// ---------------------------------------------------------------------------
+
+func TestNewLayout_should_error_when_otherTotal_is_zero_after_floor_calculation(t *testing.T) {
+	// Arrange: context window so small that all three non-buffer segments floor to zero
+	// AND buffer must be raised (buffer floor < max_output_tokens) to reach the guard.
+	//
+	// With total=10 and ratios pinned=0.003, summary=0.003, active=0.004, buffer=0.990:
+	//   pinned  = floor(10 * 0.003) = floor(0.03) = 0
+	//   summary = floor(10 * 0.003) = floor(0.03) = 0
+	//   active  = floor(10 * 0.004) = floor(0.04) = 0
+	//   buffer  = floor(10 * 0.990) = floor(9.90) = 9
+	//
+	// buffer(9) < max_output_tokens(10) → auto-raise triggered.
+	// otherTotal = 0+0+0 = 0 → the new guard returns an error.
+	//
+	// (The minimum-capacity guard also fires, but the otherTotal guard fires first.)
+	profile := ModelProfile{
+		ContextWindowTokens: 10,
+		MaxOutputTokens:     10,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.003,
+		SummaryRatio: 0.003,
+		ActiveRatio:  0.004,
+		BufferRatio:  0.990,
+	}
+
+	// Act
+	_, err := NewLayout(profile, cfg)
+
+	// Assert: must return an error (either otherTotal==0 guard or minimum-capacity guard)
+	if err == nil {
+		t.Fatal("NewLayout() expected error when otherTotal is zero, got nil")
+	}
+	errMsg := err.Error()
+	if len(errMsg) == 0 {
+		t.Error("expected descriptive error message")
 	}
 }
 

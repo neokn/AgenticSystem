@@ -29,7 +29,7 @@ type ModelProfile struct {
 
 	// Optional: independent compress-worker model configuration.
 	// When CompressModelID is empty, callers should fall back to ModelID.
-	CompressModelID              string
+	CompressModelID               string
 	CompressCostPer1KInputTokens  float64
 	CompressCostPer1KOutputTokens float64
 }

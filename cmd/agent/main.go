@@ -181,7 +181,11 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 		return fmt.Errorf("failed to build ADK plugin: %w", err)
 	}
 
-	// Step 7a: Create ADK Gemini model
+	// Step 7a: Create ADK Gemini model.
+	// Note: gemini.NewModel accepts a *genai.ClientConfig (not an existing *genai.Client),
+	// so a separate client configuration is required here. The genaiClient created in Step 1
+	// is used exclusively for the compress worker; the ADK Gemini model manages its own
+	// internal client lifecycle via the ClientConfig it receives.
 	llmModel, err := gemini.NewModel(ctx, profile.ModelID, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -271,7 +275,7 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 				if meta := event.CustomMetadata; meta != nil {
 					if _, ok := meta["oom_warning"]; ok {
 						isOOM = true
-						fmt.Fprintf(errOutput, "OOM_WARNING: context window exhausted, please start a new conversation\n")
+						fmt.Fprintf(errOutput, "OOM_WARNING: Context window exhausted. Please start a new conversation.\n")
 					}
 				}
 				continue

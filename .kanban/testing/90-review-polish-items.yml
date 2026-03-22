@@ -1,0 +1,237 @@
+title: "Review Polish: Fix Jobs' should-fix and nit items from cards 10-70"
+labels: [backend, core-logic]
+depends-on: []
+completed-by:
+  backlog: "jules"
+  in-progress: "james"
+acceptance:
+  # --- Chunk A: go.mod genai direct dependency (Card 10) ---
+  - given: google.golang.org/genai is imported directly in compress.go and main.go
+    when: go.mod is corrected
+    then: go mod tidy leaves genai listed as a direct dependency (no "// indirect" marker)
+
+  # --- Chunk B: profile.go + profile_test.go cleanup (Card 20) ---
+  - given: profile.go line 34 has a double-space gofmt violation before float64
+    when: gofmt is applied
+    then: go vet and gofmt -l report zero formatting errors on profile.go
+
+  - given: profile_test.go line 340 uses "_ = p.CompressModelID" with no assertion
+    when: the dead assignment is replaced with a real assertion
+    then: the test verifies CompressModelID is a string (non-nil type check via comparison to "")
+
+  - given: TestGetProfile_ReturnsBuiltin_GeminiFlashLite, Gemini25Pro, Gemini25Flash lack AAA markers
+    when: "// Arrange", "// Act", "// Assert" comments are added
+    then: all three tests follow the same AAA structure as surrounding tests
+
+  - given: NewRegistry calls in profile_test.go use "reg, _" ignoring the error
+    when: error handling is added
+    then: at minimum one of the call sites uses t.Fatalf on the ignored error; remaining sites are audited and documented with inline rationale if intentionally ignored
+
+  # --- Chunk C: layout.go defensive guard + test removal (Card 30) ---
+  - given: NewLayout reaches the otherTotal==0 branch (all three non-buffer segments happen to be zero) with no explicit error
+    when: an explicit error is returned for otherTotal==0
+    then: NewLayout returns a non-nil error with a message containing "otherTotal" or "non-buffer segments" when pinned+summary+active==0 after initial floor calculation
+
+  - given: TestLayoutConfig_should_hold_per_segment_ratios tests that Go struct literal assignment works
+    when: the test is removed
+    then: go test ./internal/memory/... passes and test count decreases by one; the removed test covered no application behaviour
+
+  - given: layout.go line 111 has the comment "floor+remainder" on the deductActive assignment
+    when: the comment is expanded
+    then: the comment explains that deductActive absorbs the rounding remainder so that (deductPinned + deductSummary + deductActive) == deficit exactly
+
+  # --- Chunk D: compress.go fixes (Card 50) ---
+  - given: NewStrategyRegistry creates a Generational with a nil worker; calling Compress on it will panic
+    when: a nil-worker guard is added to Generational.Compress
+    then: calling Compress with a nil worker returns a non-nil error containing "worker is nil" instead of panicking; go test -race ./... passes
+
+  - given: compress_test.go TestCompressResult_should_calculate_ratio_correctly computes the ratio itself and never calls Compress
+    when: the test is rewritten to call g.Compress via a mock worker
+    then: the test asserts that result.ActualCompressionRatio equals candidateTokens/originalTokens using values returned from a real Compress call
+
+  - given: compress.go buildPrompt calls tmpl.Execute with "_ =" silently discarding the error
+    when: the error is handled
+    then: a slog.Warn is emitted with the execute error and the fallback plain-text path is taken; go test -race ./... passes
+
+  - given: compress.go SelectCandidates comment says "Copies the slice header — does not copy underlying array" but make+copy copies elements
+    when: the comment is corrected
+    then: the comment accurately states that a new backing array is allocated and elements are copied, so mutations to the returned slice do not affect activeTurns
+
+  # --- Chunk E: main.go wording + stale comment (Card 70) ---
+  - given: main.go creates a genai.Client (genaiClient) at line 141 and then creates a second implicit client inside gemini.NewModel at line 185 using a separate ClientConfig
+    when: the dual-client pattern is documented or consolidated
+    then: either a single genai.Client is reused for both the compress worker and the ADK Gemini model, OR a clear comment explains why two clients are intentional (e.g., ADK model requires its own client lifecycle)
+
+  - given: OOM warning at line 274 prints "context window exhausted, please start a new conversation" (lower-case) while line 285 prints "[OOM] Context window exhausted. Please start a new conversation." (sentence-case)
+    when: the wording is aligned
+    then: both messages use the same casing and punctuation style; go test ./cmd/agent/... passes
+
+  - given: main_test.go line 191 comment says "Uses stubs instead of real genai.Client (no API key needed)" but the test uses concrete memory types, not stubs
+    when: the comment is corrected
+    then: the comment accurately describes what the test does (e.g., "Assembles real memory types without a genai.Client")
+
+architecture: {}
+assignee:
+history:
+  - stage: backlog
+    at: 2026-03-22T20:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T04:42:54+00:00
+description: |
+  Consolidates all non-blocking should-fix and nit items from Jobs' code reviews
+  on cards 10-70. Items are organized into five ~1-hour chunks for a developer
+  to work through sequentially. Each chunk is independently committable.
+
+  --- ITEMS VERIFIED AS ALREADY FIXED ---
+  - Card 10 main.go TODO for ADR-0003: the runDemo function comment already
+    documents the architecture steps and references ADR-0003 by name. Dropped.
+
+  --- ITEMS DROPPED (design decisions, not bugs) ---
+  - Card 70 main.go:98 %f vs %g: %f is intentional — the acceptance criteria
+    spec explicitly states "6-decimal float" for usage_ratio_curve. Dropped.
+  - Card 70 main.go:303 compress_cost_usd comment: documents known MVP scope
+    limitation, not a TODO that blocks anything. Dropped.
+  - Card 30 DefaultLayoutConfig runtime.Caller fragility: go:embed would require
+    embedding configs/ into the binary. This is an architectural trade-off for
+    Jensen to evaluate; flagged below but not blocking development work.
+  - Card 50 AC8 log message wording: no corresponding test assertion found;
+    cannot verify without running full integration suite. Dropped from this card.
+
+  --- CHUNK A (~30 min): go.mod direct dependency fix ---
+  Card 10: google.golang.org/genai is used directly in compress.go and main.go
+  but is listed as "// indirect" in go.mod. Run `go get google.golang.org/genai`
+  then `go mod tidy` to promote it to a direct dependency.
+
+  --- CHUNK B (~45 min): profile.go + profile_test.go cleanup ---
+  Card 20, four fixes:
+  1. profile.go line 34: gofmt double-space before float64 — run gofmt.
+  2. profile_test.go line 340: "_ = p.CompressModelID" — replace with a real
+     assertion (e.g., assert CompressModelID == "" for a profile that has no
+     compress model set, confirming the zero value is returned correctly).
+  3. Three tests (GeminiFlashLite, Gemini25Pro, Gemini25Flash) lack // Arrange
+     // Act // Assert markers — add them.
+  4. "reg, _" ignores NewRegistry error in multiple test functions — add at
+     least t.Fatalf for the main test sites; document rationale for any that
+     are intentionally ignored (e.g., setup helpers where error is impossible).
+
+  --- CHUNK C (~30 min): layout.go guard + test removal ---
+  Card 30, three fixes:
+  1. layout.go: when otherTotal==0 after initial floor calculation, NewLayout
+     currently does nothing (the if block is skipped). Return an explicit error:
+     this situation means the profile's ContextWindowTokens is so small that all
+     three non-buffer segments floor to zero, which is an invalid state.
+  2. layout_test.go: remove TestLayoutConfig_should_hold_per_segment_ratios —
+     it only proves Go struct literals work, not application behavior.
+  3. layout.go line 111: expand the "floor+remainder" comment to explain that
+     deductActive = deficit - deductPinned - deductSummary ensures the total
+     deduction equals deficit exactly (no rounding loss).
+
+  --- CHUNK D (~60 min): compress.go fixes ---
+  Card 50, four fixes:
+  1. Generational.Compress: add nil-worker guard at the top — return error
+     "compress: worker is nil" before attempting g.worker.Summarize.
+  2. compress_test.go ratio test: rewrite to call g.Compress with a mock worker
+     that returns a known CandidatesTokenCount; assert result.ActualCompressionRatio
+     equals float64(candidatesTokenCount)/float64(originalTokens).
+  3. buildPrompt: change "_ = tmpl.Execute(&buf, ...)" to capture the error and
+     emit slog.Warn then fall through to return buf.String() (partial output is
+     still better than empty; or fall back to plain-text builder).
+  4. SelectCandidates comment: correct "Copies the slice header — does not copy
+     underlying array" to accurately describe make+copy behavior.
+
+  --- CHUNK E (~30 min): main.go wording + stale comment ---
+  Card 70, three fixes:
+  1. Dual genai.Client: either pass genaiClient to gemini.NewModel (if the ADK
+     API supports it) or add a comment explaining why two clients are needed.
+     Check the google.golang.org/adk/model/gemini API for a constructor that
+     accepts an existing *genai.Client.
+  2. OOM wording: align line 274 ("context window exhausted, please start a new
+     conversation") with line 285 ("Context window exhausted. Please start a new
+     conversation.") — pick one style and apply consistently.
+  3. main_test.go line 191: update comment to "Assembles MemoryLayout using
+     real memory types without a genai.Client — no API key required."
+
+  --- ARCHITECTURE NOTE (for Jensen) ---
+  Card 30 DefaultLayoutConfig uses runtime.Caller(0) to find configs/default.json
+  relative to the source file. This breaks if the binary is compiled and run from
+  a directory without the source tree present. Consider go:embed as a follow-up
+  architectural decision (new card if Jensen decides to address it).
+
+tasks:
+  - text: "Chunk A: go.mod — promote genai to direct dependency"
+    done: true
+  - text: "Chunk B: profile.go gofmt + profile_test.go dead assertion + AAA markers + silent error"
+    done: true
+  - text: "Chunk C: layout.go otherTotal==0 guard + remove invalid test + expand comment"
+    done: true
+  - text: "Chunk D: compress.go nil-worker guard + rewrite ratio test + tmpl.Execute error + fix slice comment"
+    done: true
+  - text: "Chunk E: main.go dual-client doc/fix + OOM wording + stale test comment"
+    done: true
+  - text: "After all chunks: go test -race ./... passes with no new failures"
+    done: true
+comments:
+  - author: "jules"
+    at: "2026-03-22T04:42:54+00:00"
+    text: |
+      Verified all items against actual source files before refining.
+
+      ALREADY FIXED (dropped from card):
+      - Card 10 main.go ADR-0003 TODO: runDemo already documents architecture
+        steps and references ADR-0003 inline.
+
+      DROPPED (design/architectural decisions):
+      - Card 70 %f vs %g: spec requires 6-decimal format, %f is correct.
+      - Card 70 compress_cost_usd comment: MVP scope note, not actionable.
+      - Card 50 AC8 log wording: no test assertion found to anchor this fix.
+      - Card 30 runtime.Caller fragility: architectural trade-off, noted for
+        Jensen separately in description.
+
+      STILL OUTSTANDING (19 items reduced to 16 actionable fixes):
+      Chunked into 5 blocks of ~30-60 min each. Chunk D (compress.go) is the
+      heaviest at ~60 min due to the tautology test rewrite.
+
+      Splitting strategy used: Slice the Hamburger — each chunk is independently
+      committable and passes go test -race before moving to the next. No story
+      splitting needed; all items share one domain (polish/cleanup) and one
+      developer can sequence them in a single sitting.
+  - author: "james"
+    at: "2026-03-22T12:55:00+08:00"
+    text: |
+      Implementation complete. go test -race ./... PASS.
+
+      Files modified:
+      - go.mod: promoted google.golang.org/genai to direct dependency (Chunk A)
+      - internal/memory/profile.go: gofmt alignment fix (CompressModelID field) (Chunk B)
+      - internal/memory/profile_test.go: (Chunk B)
+          * Added AAA markers to GeminiFlashLite, Gemini25Pro, Gemini25Flash tests
+          * Replaced dead _ = p.CompressModelID with real assertion (AC#2 test)
+          * Fixed NewRegistry(custom) call to handle error with t.Fatalf
+          * Added rationale comments on remaining reg, _ = NewRegistry() calls
+            (all are NewRegistry() with no args which cannot fail)
+      - internal/memory/layout.go: (Chunk C)
+          * Added otherTotal==0 guard inside BUFFER auto-raise block
+          * Expanded "floor+remainder" comment to explain deductActive calculation
+      - internal/memory/layout_test.go: (Chunk C)
+          * Removed TestLayoutConfig_should_hold_per_segment_ratios (trivial struct test)
+          * Added TestNewLayout_should_error_when_otherTotal_is_zero_after_floor_calculation
+      - internal/memory/compress.go: (Chunk D)
+          * Added nil-worker guard at top of Generational.Compress
+          * Fixed SelectCandidates comment (make+copy allocates new backing array)
+          * buildPrompt error handling: already handled by Card 80 — no conflict
+      - internal/memory/compress_test.go: (Chunk D)
+          * Rewrote TestCompressResult_should_calculate_ratio_correctly to call
+            g.Compress with mockRatioWorker, asserting ratio from real Compress call
+          * Added TestGenerational_Compress_should_return_error_when_worker_is_nil
+          * Added mockRatioWorker helper
+      - cmd/agent/main.go: (Chunk E)
+          * Added comment explaining dual genai.Client pattern (gemini.NewModel does
+            not accept an existing *genai.Client, only *genai.ClientConfig)
+          * Aligned OOM_WARNING message to sentence case with period
+      - cmd/agent/main_test.go: (Chunk E)
+          * Fixed stale comment on Test_should_assemble_memory_layout_with_default_config
+
+      SKIPPED (conflicts with Card 80 changes to compress.go):
+      - Chunk D item 3: buildPrompt tmpl.Execute error — already handled by Card 80
+        which rewrote buildPrompt to use dotprompt and return (string, error).
+      All other Chunk D items applied cleanly against Card 80's compress.go changes.
