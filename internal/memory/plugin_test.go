@@ -114,7 +114,7 @@ func newTestPlugin(t *testing.T, tc tokenCounter, ac apiTokenCounter, strategy C
 			result: &CompressResult{CompressedText: "summary", OriginalTokens: 100, CompressedTokens: 20},
 		}
 	}
-	p, err := newMemoryPluginWithDeps(tc, ac, layout, strategy, profile, threshold)
+	p, err := newMemoryPluginWithDeps(tc, ac, layout, strategy, profile, threshold, 0)
 	if err != nil {
 		t.Fatalf("newTestPlugin: newMemoryPluginWithDeps: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestNewMemoryPlugin_RejectsThresholdOutOfRange(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			_, err := newMemoryPluginWithDeps(&stubTokenCounter{}, &stubAPICounter{}, layout, strategy, profile, tt.threshold)
+			_, err := newMemoryPluginWithDeps(&stubTokenCounter{}, &stubAPICounter{}, layout, strategy, profile, tt.threshold, 0)
 
 			// Assert
 			if err == nil {

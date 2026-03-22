@@ -48,11 +48,10 @@ func newOOMTestPlugin(
 			result: &CompressResult{CompressedText: "summary", OriginalTokens: 100, CompressedTokens: 20},
 		}
 	}
-	p, err := newMemoryPluginWithDeps(tc, ac, layout, strategy, profile, primaryThreshold)
+	p, err := newMemoryPluginWithDeps(tc, ac, layout, strategy, profile, primaryThreshold, emergencyThreshold)
 	if err != nil {
 		t.Fatalf("newOOMTestPlugin: newMemoryPluginWithDeps: %v", err)
 	}
-	p.emergencyThreshold = emergencyThreshold
 	return p
 }
 
@@ -169,6 +168,29 @@ func TestOOMHandler_TriggersSecondaryCompression_WhenAboveEmergencyThreshold(t *
 	// req.Contents must have been updated — non-empty after secondary compression.
 	if len(req.Contents) == 0 {
 		t.Fatalf("expected req.Contents to be non-empty after secondary compression, got empty")
+	}
+	// Structural assertion: buildCompressedContents with compressedCount=1 produces
+	// [secondary_summary + recentActive... + user_msg].
+	// makeMultiTurnRequest has 5 elements; after primary compression SelectCandidates
+	// returns all 4 active turns → buildCompressedContents produces [primary_summary + user_msg] = 2 elements.
+	// Secondary compression calls buildCompressedContents with compressedCount=1 on
+	// that 2-element slice: prior=[primary_summary], recentActive=prior[1:]=[], result=[secondary_summary + user_msg] = 2.
+	const wantContentCount = 2
+	if len(req.Contents) != wantContentCount {
+		t.Errorf("expected req.Contents to have %d elements after secondary compression (summary + user_msg), got %d", wantContentCount, len(req.Contents))
+	}
+	// Last element must be the original user message (not truncated).
+	lastContent := req.Contents[len(req.Contents)-1]
+	if lastContent == nil || len(lastContent.Parts) == 0 || lastContent.Parts[0].Text != "new message" {
+		t.Errorf("expected last content to be the original user message 'new message', got %v", lastContent)
+	}
+	// First element must be the secondary summary (model role).
+	firstContent := req.Contents[0]
+	if firstContent == nil || firstContent.Role != "model" {
+		t.Errorf("expected first content to be model-role summary, got role=%q", firstContent.Role)
+	}
+	if len(firstContent.Parts) == 0 || firstContent.Parts[0].Text != "shorter secondary summary" {
+		t.Errorf("expected first content to contain secondary summary text, got %v", firstContent.Parts)
 	}
 }
 

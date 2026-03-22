@@ -147,12 +147,13 @@ func NewMemoryPlugin(
 	if err != nil {
 		return nil, fmt.Errorf("NewMemoryPlugin: creating local tokenizer for %q: %w", profile.ModelID, err)
 	}
-	return newMemoryPluginWithDeps(tok, &genaiAPICounter{client: client}, layout, strategy, profile, threshold)
+	return newMemoryPluginWithDeps(tok, &genaiAPICounter{client: client}, layout, strategy, profile, threshold, 0)
 }
 
 // newMemoryPluginWithDeps is the internal constructor used by both NewMemoryPlugin
 // and unit tests. It accepts interfaces for the tokenizer and API counter so
 // that tests can inject stubs.
+// Pass emergencyThreshold=0 to use the default of 0.90 (90%).
 func newMemoryPluginWithDeps(
 	tc tokenCounter,
 	ac apiTokenCounter,
@@ -160,12 +161,19 @@ func newMemoryPluginWithDeps(
 	strategy CompressStrategy,
 	profile ModelProfile,
 	threshold float64,
+	emergencyThreshold float64,
 ) (*MemoryPlugin, error) {
 	if threshold == 0.0 {
 		threshold = defaultThreshold
 	}
 	if threshold <= 0.0 || threshold >= 1.0 {
 		return nil, fmt.Errorf("NewMemoryPlugin: threshold must be in (0, 1), got %v", threshold)
+	}
+	if emergencyThreshold == 0.0 {
+		emergencyThreshold = defaultEmergencyThreshold
+	}
+	if emergencyThreshold <= 0.0 || emergencyThreshold >= 1.0 {
+		return nil, fmt.Errorf("NewMemoryPlugin: emergencyThreshold must be in (0, 1), got %v", emergencyThreshold)
 	}
 	if strategy == nil {
 		return nil, fmt.Errorf("NewMemoryPlugin: strategy must not be nil")
@@ -177,7 +185,7 @@ func newMemoryPluginWithDeps(
 		strategy:           strategy,
 		profile:            profile,
 		threshold:          threshold,
-		emergencyThreshold: defaultEmergencyThreshold,
+		emergencyThreshold: emergencyThreshold,
 	}, nil
 }
 
@@ -465,7 +473,9 @@ func (p *MemoryPlugin) handleOOM(ctx context.Context, req *model.LLMRequest, pre
 	}
 
 	// --- Step 4: Apply secondary compression — rewrite req.Contents ---
-	req.Contents = buildCompressedContents(req, secondaryResult.CompressedText, len(req.Contents)-1)
+	// compressedCount=1: secondary compression replaces exactly the existing summary turn (1 turn).
+	// Recent active turns (from primary compression) are preserved after position 1.
+	req.Contents = buildCompressedContents(req, secondaryResult.CompressedText, 1)
 
 	// Update plugin state under mu.
 	reclaimedTokens := secondaryResult.OriginalTokens - secondaryResult.CompressedTokens
