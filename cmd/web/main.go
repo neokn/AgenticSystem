@@ -24,12 +24,9 @@ import (
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 
+	"github.com/neokn/agenticsystem/internal/agentdef"
 	"github.com/neokn/agenticsystem/internal/memory"
 )
-
-const systemPrompt = `You are a helpful assistant. You must remember every fact stated in this conversation.
-When the user mentions a "secret word" or asks you to remember something, acknowledge it clearly.
-When asked to recall the secret word, always state it explicitly.`
 
 func run() error {
 	_ = godotenv.Load()
@@ -40,6 +37,12 @@ func run() error {
 	}
 
 	ctx := context.Background()
+
+	// --- load agent definition from agents/demo_agent/agent.prompt ---
+	def, err := agentdef.Load(".", "demo_agent")
+	if err != nil {
+		return fmt.Errorf("loading agent definition: %w", err)
+	}
 
 	// --- genai client (for compress worker) ---
 	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey})
@@ -52,7 +55,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("creating registry: %w", err)
 	}
-	profile, err := reg.GetProfile("gemini-3-flash-preview")
+	profile, err := reg.GetProfile(def.ModelID)
 	if err != nil {
 		return fmt.Errorf("getting profile: %w", err)
 	}
@@ -88,9 +91,9 @@ func run() error {
 		return fmt.Errorf("creating Gemini model: %w", err)
 	}
 	a, err := llmagent.New(llmagent.Config{
-		Name:        "demo_agent",
+		Name:        def.Name,
 		Model:       llmModel,
-		Instruction: systemPrompt,
+		Instruction: def.Instruction,
 		Description: "Demo agent with context memory management.",
 	})
 	if err != nil {

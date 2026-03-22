@@ -34,15 +34,9 @@ import (
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 
+	"github.com/neokn/agenticsystem/internal/agentdef"
 	"github.com/neokn/agenticsystem/internal/memory"
 )
-
-// demoSystemPrompt instructs the agent to remember a secret word stated in
-// turn 1. This allows turn-N recall to be verified deterministically in
-// automated long-conversation test runs.
-const demoSystemPrompt = `You are a helpful assistant. You must remember every fact stated in this conversation.
-When the user mentions a "secret word" or asks you to remember something, acknowledge it clearly.
-When asked to recall the secret word, always state it explicitly.`
 
 // cliConfig holds parsed command-line flags.
 type cliConfig struct {
@@ -137,6 +131,12 @@ func writeMetricsToFile(path, content string) error {
 //  8. Run conversation loop (stdin → agent → stdout)
 //  9. On exit: print metrics report
 func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writer, errOutput io.Writer) error {
+	// Step 0: Load agent definition from agents/demo_agent/agent.prompt
+	def, err := agentdef.Load(".", "demo_agent")
+	if err != nil {
+		return fmt.Errorf("failed to load agent definition: %w", err)
+	}
+
 	// Step 1: Create genai.Client
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -146,12 +146,12 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 		return fmt.Errorf("failed to create genai.Client: %w", err)
 	}
 
-	// Step 2: ModelProfile for gemini-3-flash-preview (compress worker: gemini-3.1-flash-lite-preview)
+	// Step 2: ModelProfile from agent definition (compress worker: gemini-3.1-flash-lite-preview)
 	reg, err := memory.NewRegistry()
 	if err != nil {
 		return fmt.Errorf("failed to create model registry: %w", err)
 	}
-	profile, err := reg.GetProfile("gemini-3-flash-preview")
+	profile, err := reg.GetProfile(def.ModelID)
 	if err != nil {
 		return fmt.Errorf("failed to get model profile: %w", err)
 	}
@@ -197,9 +197,9 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 
 	// Step 7b: Create LLMAgent
 	a, err := llmagent.New(llmagent.Config{
-		Name:        "demo_agent",
+		Name:        def.Name,
 		Model:       llmModel,
-		Instruction: demoSystemPrompt,
+		Instruction: def.Instruction,
 		Description: "Demo agent for end-to-end verification of context memory manager.",
 	})
 	if err != nil {

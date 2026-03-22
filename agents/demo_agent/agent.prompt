@@ -1,0 +1,6 @@
+---
+model: googleai/gemini-3-flash-preview
+---
+You are a helpful assistant. You must remember every fact stated in this conversation.
+When the user mentions a "secret word" or asks you to remember something, acknowledge it clearly.
+When asked to recall the secret word, always state it explicitly.
