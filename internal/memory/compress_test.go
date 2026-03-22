@@ -3,8 +3,11 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	dp "github.com/google/dotprompt/go/dotprompt"
 )
 
 // ---- Task 1 & 2: Interface and type definition tests ----
@@ -27,9 +30,9 @@ func TestCompressResult_HasAllFields(t *testing.T) {
 		ActualCompressionRatio: 0.3,
 		Cost:                   0.001,
 		WorkerUsage: WorkerUsageMetadata{
-			PromptTokenCount:    80,
+			PromptTokenCount:     80,
 			CandidatesTokenCount: 20,
-			TotalTokenCount:     100,
+			TotalTokenCount:      100,
 		},
 	}
 
@@ -152,35 +155,136 @@ func TestGenerational_SelectCandidates_should_return_exactly_N_when_exactly_N_av
 	}
 }
 
-// ---- Task 8: Prompt template config tests ----
+// ---- dotprompt buildPrompt tests ----
 
-// TestGenerationalConfig_should_use_default_template_when_not_configured
-func TestGenerationalConfig_should_use_default_template_when_not_configured(t *testing.T) {
-	// Arrange & Act
-	cfg := defaultGenerationalConfig()
+// inlineSummarizeSource is a minimal Handlebars template matching the
+// summarize.prompt behavior, used to avoid filesystem access in tests.
+const inlineSummarizeSource = `---
+model: googleai/gemini-2.0-flash-lite
+input:
+  schema:
+    existingSummary?: string
+    turns: string
+---
+{{#if existingSummary}}
+Prior summary:
+{{existingSummary}}
+
+{{/if}}
+Summarize the following conversation turns, preserving key information:
+{{turns}}`
+
+// compileInlineStore compiles the inline source and wraps it as a PromptStore
+// so tests never touch the filesystem.
+func compileInlineStore(t *testing.T) dp.PromptStore {
+	t.Helper()
+	return &inlinePromptStore{source: inlineSummarizeSource}
+}
+
+// inlinePromptStore implements dp.PromptStore backed by an in-memory source.
+type inlinePromptStore struct {
+	source string
+}
+
+func (s *inlinePromptStore) List(_ dp.ListPromptsOptions) (dp.ListPromptsResult[dp.PromptRef], error) {
+	return dp.ListPromptsResult[dp.PromptRef]{}, nil
+}
+
+func (s *inlinePromptStore) ListPartials(_ dp.ListPartialsOptions) (dp.ListPartialsResult[dp.PartialRef], error) {
+	return dp.ListPartialsResult[dp.PartialRef]{}, nil
+}
+
+func (s *inlinePromptStore) Load(name string, _ dp.LoadPromptOptions) (dp.PromptData, error) {
+	if name == "summarize" {
+		return dp.PromptData{
+			PromptRef: dp.PromptRef{Name: name},
+			Source:    s.source,
+		}, nil
+	}
+	return dp.PromptData{}, fmt.Errorf("prompt not found: %s", name)
+}
+
+func (s *inlinePromptStore) LoadPartial(name string, _ dp.LoadPartialOptions) (dp.PartialData, error) {
+	return dp.PartialData{}, fmt.Errorf("partial not found: %s", name)
+}
+
+// TestGenerational_buildPrompt_should_render_turns_when_existingSummary_absent
+func TestGenerational_buildPrompt_should_render_turns_when_existingSummary_absent(t *testing.T) {
+	// Arrange
+	g := &Generational{
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: compileInlineStore(t),
+		},
+	}
+	turns := []ConversationTurn{
+		{Role: "user", Content: "hello", TokenCount: 1},
+		{Role: "model", Content: "hi there", TokenCount: 2},
+	}
+
+	// Act
+	prompt, err := g.buildPrompt("", turns)
 
 	// Assert
-	if cfg.PromptTemplate == "" {
-		t.Error("default PromptTemplate must not be empty")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if prompt == "" {
+		t.Fatal("expected non-empty prompt")
+	}
+	if strings.Contains(prompt, "Prior summary:") {
+		t.Errorf("expected no prior-summary block when existingSummary is empty, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "hello") {
+		t.Errorf("expected turns content in prompt, got: %s", prompt)
 	}
 }
 
-// TestGenerationalConfig_should_use_custom_template_when_configured
-func TestGenerationalConfig_should_use_custom_template_when_configured(t *testing.T) {
+// TestGenerational_buildPrompt_should_include_existingSummary_in_rendered_output
+func TestGenerational_buildPrompt_should_include_existingSummary_in_rendered_output(t *testing.T) {
 	// Arrange
-	customTemplate := "custom: {{.ExistingSummary}} | {{.Turns}}"
-	cfg := GenerationalConfig{
-		OldestN:        5,
-		PromptTemplate: customTemplate,
+	g := &Generational{
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: compileInlineStore(t),
+		},
+	}
+	turns := []ConversationTurn{
+		{Role: "user", Content: "new question", TokenCount: 2},
+	}
+	existingSummary := "prior context: topic A was discussed"
+
+	// Act
+	prompt, err := g.buildPrompt(existingSummary, turns)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !strings.Contains(prompt, existingSummary) {
+		t.Errorf("expected existingSummary in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Prior summary:") {
+		t.Errorf("expected prior-summary heading in prompt, got: %s", prompt)
+	}
+}
+
+// TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store
+func TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store(t *testing.T) {
+	// Arrange — store that always returns an error (simulates missing .prompt file)
+	g := &Generational{
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: &failingPromptStore{},
+		},
 	}
 
-	// Act: build prompt to verify template is used verbatim
-	g := &Generational{cfg: cfg}
-	prompt := g.buildPrompt("prior summary", makeNTurns(2))
+	// Act
+	_, err := g.buildPrompt("", makeNTurns(1))
 
-	// Assert: the custom template text (prefix) must appear in output
-	if !strings.Contains(prompt, "custom:") {
-		t.Errorf("expected custom template to be used, got: %s", prompt)
+	// Assert
+	if err == nil {
+		t.Fatal("expected error when prompt not found in store, got nil")
 	}
 }
 
@@ -249,7 +353,10 @@ func TestCompressResult_should_calculate_ratio_correctly(t *testing.T) {
 func TestGenerational_Compress_should_return_nil_result_and_error_when_worker_fails(t *testing.T) {
 	// Arrange — use mock worker that always fails
 	g := &Generational{
-		cfg:    defaultGenerationalConfig(),
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: compileInlineStore(t),
+		},
 		worker: &mockFailingWorker{},
 	}
 	turns := makeNTurns(3)
@@ -270,12 +377,43 @@ func TestGenerational_Compress_should_return_nil_result_and_error_when_worker_fa
 	}
 }
 
+// TestGenerational_Compress_should_return_error_when_buildPrompt_fails
+func TestGenerational_Compress_should_return_error_when_buildPrompt_fails(t *testing.T) {
+	// Arrange — store that always fails Load
+	g := &Generational{
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: &failingPromptStore{},
+		},
+		worker: &mockRecordingWorker{},
+	}
+	turns := makeNTurns(2)
+	profile := ModelProfile{
+		ModelID:             "gemini-2.0-flash",
+		ContextWindowTokens: 1048576,
+	}
+
+	// Act
+	result, err := g.Compress(context.Background(), turns, "", profile)
+
+	// Assert
+	if err == nil {
+		t.Fatal("expected error when buildPrompt fails, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result when buildPrompt fails, got non-nil")
+	}
+}
+
 // TestGenerational_Compress_should_use_CompressModelID_when_set
 func TestGenerational_Compress_should_use_CompressModelID_when_set(t *testing.T) {
 	// Arrange
 	recorder := &mockRecordingWorker{}
 	g := &Generational{
-		cfg:    defaultGenerationalConfig(),
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: compileInlineStore(t),
+		},
 		worker: recorder,
 	}
 	turns := makeNTurns(2)
@@ -299,7 +437,10 @@ func TestGenerational_Compress_should_use_primary_model_when_CompressModelID_emp
 	// Arrange
 	recorder := &mockRecordingWorker{}
 	g := &Generational{
-		cfg:    defaultGenerationalConfig(),
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: compileInlineStore(t),
+		},
 		worker: recorder,
 	}
 	turns := makeNTurns(2)
@@ -323,7 +464,10 @@ func TestGenerational_Compress_should_include_existingSummary_in_prompt(t *testi
 	// Arrange
 	recorder := &mockRecordingWorker{}
 	g := &Generational{
-		cfg:    defaultGenerationalConfig(),
+		cfg: GenerationalConfig{
+			OldestN:     3,
+			PromptStore: compileInlineStore(t),
+		},
 		worker: recorder,
 	}
 	turns := makeNTurns(2)
@@ -361,8 +505,27 @@ func (m *mockRecordingWorker) Summarize(_ context.Context, model, prompt string)
 	m.calledWithModel = model
 	m.calledWithPrompt = prompt
 	return "compressed summary", &WorkerUsageMetadata{
-		PromptTokenCount:    50,
+		PromptTokenCount:     50,
 		CandidatesTokenCount: 10,
-		TotalTokenCount:     60,
+		TotalTokenCount:      60,
 	}, nil
+}
+
+// failingPromptStore always returns an error from Load.
+type failingPromptStore struct{}
+
+func (s *failingPromptStore) List(_ dp.ListPromptsOptions) (dp.ListPromptsResult[dp.PromptRef], error) {
+	return dp.ListPromptsResult[dp.PromptRef]{}, nil
+}
+
+func (s *failingPromptStore) ListPartials(_ dp.ListPartialsOptions) (dp.ListPartialsResult[dp.PartialRef], error) {
+	return dp.ListPartialsResult[dp.PartialRef]{}, nil
+}
+
+func (s *failingPromptStore) Load(name string, _ dp.LoadPromptOptions) (dp.PromptData, error) {
+	return dp.PromptData{}, errors.New("simulated store failure")
+}
+
+func (s *failingPromptStore) LoadPartial(name string, _ dp.LoadPartialOptions) (dp.PartialData, error) {
+	return dp.PartialData{}, errors.New("simulated store failure")
 }
