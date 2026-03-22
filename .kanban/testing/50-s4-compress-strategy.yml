@@ -1,0 +1,164 @@
+title: "S4: CompressStrategy Interface + Generational Implementation"
+labels: [backend, core-logic]
+depends-on: [20-s0-model-profile]
+completed-by:
+  backlog: jules
+  in-progress: james
+acceptance:
+  # --- Happy path ---
+  - given: compress is triggered with strategy = generational and activeTurns has 8 turns
+    when: SelectCandidates is called with targetReclaimTokens = 1000
+    then: returns the 5 oldest turns (index 0..4) in original order
+  - given: Generational.Compress is called with 5 candidate turns and an empty existingSummary
+    when: the Compress Worker (isolated ADK Runner + LLMAgent) executes successfully
+    then: >
+      CompressResult.CompressedText is non-empty; CompressResult.OriginalTokens > 0; CompressResult.CompressedTokens < CompressResult.OriginalTokens; CompressResult.ActualCompressionRatio == float64(CompressedTokens) / float64(OriginalTokens); CompressResult.WorkerUsage reflects the isolated runner's token counts
+
+  - given: profile.CompressModelID is set to "gemini-2.0-flash-lite"
+    when: Compress Worker initialises its ADK Runner + LLMAgent
+    then: the runner uses "gemini-2.0-flash-lite", not the primary model
+  - given: Generational.Compress is called with a non-empty existingSummary
+    when: compression succeeds
+    then: >
+      CompressResult.CompressedText incorporates context from existingSummary; the summarization prompt sent to the worker includes both existingSummary and the candidate turns
+
+  - given: the summarization prompt template is set in config
+    when: Compress Worker builds its LLMAgent system prompt
+    then: the configured template string is used verbatim (not the built-in default)
+  # --- Edge / failure cases ---
+  - given: activeTurns contains only 3 turns and N = 5
+    when: SelectCandidates is called
+    then: returns all 3 available turns (does not panic or return an empty slice)
+  - given: activeTurns is empty
+    when: SelectCandidates is called
+    then: returns an empty slice and Compress is never invoked downstream
+  - given: profile.CompressModelID is empty
+    when: Compress Worker initialises its ADK Runner
+    then: falls back to profile.ModelID and emits a warning log with message containing "compress_model_id not set, falling back to primary model"
+  - given: an unknown strategy name is provided at initialisation
+    when: the strategy registry resolves the name
+    then: >
+      returns an error whose message lists all registered strategy names (e.g. "unknown strategy: foo; available: generational")
+
+  - given: the Compress Worker's LLM call fails (e.g. network error)
+    when: Generational.Compress returns
+    then: returns a non-nil error and a nil *CompressResult (caller is responsible for handling gracefully)
+architecture:
+  component: internal/memory
+  layer: Domain Layer
+  pattern: Strategy
+  notes: |
+    CompressStrategy is a Go interface; Generational is the MVP-only implementation.
+    Compress Worker uses an isolated ADK Runner + LLMAgent to avoid compress-causes-OOM.
+    Strategy registry maps name → factory so unknown names produce a clear error listing
+    all registered strategies.
+    Summarization prompt template is a configurable string field on GenerationalConfig,
+    with a safe built-in default. Template receives candidate turns and existing summary
+    as named placeholders.
+assignee:
+history:
+  - stage: backlog
+    at: 2026-03-22T12:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T18:00:00+08:00
+  - stage: testing
+    at: "2026-03-22T11:55:00+08:00"
+description: |
+  Implement a pluggable compression strategy subsystem.
+
+  OS analogy: Pluggable page replacement policy.
+
+  CompressStrategy interface (internal/memory/compress.go):
+    - Name() string
+    - SelectCandidates(activeTurns []ConversationTurn, targetReclaimTokens int) []ConversationTurn
+    - Compress(candidates []ConversationTurn, existingSummary string, profile ModelProfile) (*CompressResult, error)
+
+  MVP strategy -- Generational:
+    - Selects the oldest N turns (default N=5)
+    - Executes compression via an isolated ADK Runner + LLMAgent (Compress Worker)
+    - Prefers CompressModelID (e.g. Flash-Lite) to reduce cost; falls back to primary model with warning
+    - Incorporates existingSummary into the summarization prompt so context is preserved across
+      multiple compress cycles
+
+  Compress Worker:
+    - Isolated Runner + LLMAgent (isolated context window -- never pollutes the main session)
+    - Summarization prompt template is configurable; built-in default is safe to use out of the box
+
+  Strategy registry:
+    - Maps strategy name strings to factory functions
+    - Unknown name at init returns error listing available names
+
+  File: internal/memory/compress.go
+tasks:
+  - text: "Define CompressStrategy interface (Name, SelectCandidates, Compress signatures)"
+    done: true
+  - text: "Define CompressResult struct with all fields (CompressedText, OriginalTokens, CompressedTokens, ActualCompressionRatio, Cost, WorkerUsage)"
+    done: true
+  - text: "Define ConversationTurn struct mapped from ADK Event (role, content, token_count)"
+    done: true
+  - text: "Implement Generational.SelectCandidates -- return oldest min(N, len(turns)) turns"
+    done: true
+  - text: "Implement Compress Worker: create isolated ADK Runner + LLMAgent using CompressModelID (fallback to ModelID with warning)"
+    done: true
+  - text: "Implement Compress Worker: build summarization prompt from template, injecting existingSummary + candidate turns"
+    done: true
+  - text: "Implement Generational.Compress: invoke worker, populate CompressResult fields including ratio and WorkerUsage"
+    done: true
+  - text: "Add summarization prompt template field to GenerationalConfig with a built-in default"
+    done: true
+  - text: "Implement strategy registry: map[string]factory, return error with available names on unknown key"
+    done: true
+  - text: "Write unit tests: SelectCandidates boundary cases (empty, fewer-than-N, exact-N, more-than-N)"
+    done: true
+  - text: "Write unit tests: mock CompressStrategy verifying interface compliance; mock worker verifying prompt template injection"
+    done: true
+  - text: "Write unit tests: CompressResult ratio calculation; fallback model warning; unknown strategy error message"
+    done: true
+comments:
+  - author: jules
+    at: 2026-03-22T18:00:00+08:00
+    text: |
+      Refinement summary:
+
+      ACCEPTANCE CRITERIA ADDITIONS (6 new scenarios added to the original 4):
+      - SelectCandidates boundary: fewer turns than N -- must not panic, return all available turns
+      - SelectCandidates boundary: empty activeTurns -- return empty slice, never invoke Compress
+      - CompressModelID fallback: when unset, use primary model + emit warning log with exact message
+      - existingSummary accumulation: prompt must include prior summary so multi-cycle compression
+        preserves context (critical for correctness, was implicit in spec but untested)
+      - Configurable prompt template: verified at the Worker construction point, not just config load
+      - Worker LLM failure: Compress must return (nil, error) -- caller must not receive partial results
+
+      TASK BREAKDOWN CHANGES:
+      Original "Implement Compress Worker" was a single task spanning ADK Runner init, model
+      selection fallback, and prompt construction. Split into two ~1-hour tasks:
+        (a) Runner + LLMAgent creation with model fallback
+        (b) Prompt template injection with existingSummary
+      Unit tests split into three focused tasks by concern (boundary cases, interface compliance,
+      result fields + error paths) to keep each session independent and reviewable.
+
+      SPLITTING DECISION:
+      Story not split. 9 tasks are all within internal/memory/compress.go and share the same
+      interface boundary. Each task is ~1 hour. All tasks deliver value as a single shippable
+      unit (MemoryPlugin cannot compress without this interface). Splitting by "interface only"
+      vs "implementation" would create a non-shippable technical slice (Strategy 4 / Slice the
+      Hamburger considered and rejected).
+
+      NO architecture label added -- interface design is already specified in the spec
+      (see S4 section). Jensen does not need to make new decisions before James can start.
+  - author: james
+    at: "2026-03-22T11:55:00+08:00"
+    text: |-
+      Implementation complete.
+
+      Files created:
+        - internal/memory/compress.go (production code)
+        - internal/memory/compress_test.go (unit tests)
+
+      Patterns applied: Strategy (CompressStrategy interface + Generational implementation + StrategyRegistry).
+
+      Types defined: ConversationTurn, WorkerUsageMetadata (int32 fields matching genai API), CompressResult, CompressStrategy interface, GenerationalConfig, Generational, StrategyRegistry, GenaiWorker.
+
+      Test results: 16 compress tests all PASS. One pre-existing layout test (TestNewLayout_should_raise_buffer_to_max_output_tokens_when_floor_is_less) fails - this is a S1 card issue unrelated to S4.
+
+      Note: compress_stub.go was replaced by the full compress.go implementation. The compressWorker interface is defined in compress.go (package-private) and injected into Generational for testability.
