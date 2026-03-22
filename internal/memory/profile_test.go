@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -32,6 +33,59 @@ func TestModelProfile_HasAllRequiredFields(t *testing.T) {
 	}
 	if p.MaxOutputTokens != 8192 {
 		t.Errorf("expected MaxOutputTokens 8192, got %d", p.MaxOutputTokens)
+	}
+}
+
+// Task 2: Registry type, NewRegistry, GetProfile
+
+func TestNewRegistry_ReturnsNonNilRegistry_WhenNoCustomProfiles(t *testing.T) {
+	// Arrange / Act
+	reg, err := NewRegistry()
+
+	// Assert
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if reg == nil {
+		t.Fatal("expected non-nil registry")
+	}
+}
+
+func TestGetProfile_ReturnsProfile_WhenCustomProfileRegistered(t *testing.T) {
+	// Arrange — use a custom profile so test is independent of built-in data
+	custom := ModelProfile{
+		ModelID:             "custom-model",
+		Provider:            "google",
+		ContextWindowTokens: 100000,
+		MaxOutputTokens:     4096,
+	}
+	reg, _ := NewRegistry(custom)
+
+	// Act
+	profile, err := reg.GetProfile("custom-model")
+
+	// Assert
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if profile.ModelID != "custom-model" {
+		t.Errorf("expected ModelID custom-model, got %s", profile.ModelID)
+	}
+}
+
+func TestGetProfile_ReturnsErrModelNotFound_WhenModelIDUnknown(t *testing.T) {
+	// Arrange
+	reg, _ := NewRegistry()
+
+	// Act
+	_, err := reg.GetProfile("gpt-4o")
+
+	// Assert
+	if err == nil {
+		t.Fatal("expected error for unknown model, got nil")
+	}
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Errorf("expected ErrModelNotFound, got %v", err)
 	}
 }
 
