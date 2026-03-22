@@ -1,12 +1,11 @@
 package memory
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
-	"text/template"
 
+	dp "github.com/google/dotprompt/go/dotprompt"
 	"google.golang.org/genai"
 )
 
@@ -59,33 +58,25 @@ type CompressStrategy interface {
 
 // ---- Generational strategy ----
 
-const defaultPromptTemplate = `You are a summarization assistant. Your task is to compress the following conversation turns into a concise summary that preserves all important information.
-
-{{if .ExistingSummary}}Prior summary (must be incorporated):
-{{.ExistingSummary}}
-
-{{end}}Conversation turns to compress:
-{{range .Turns}}[{{.Role}}]: {{.Content}}
-{{end}}
-Provide a concise summary:`
-
 // GenerationalConfig holds configuration for the Generational strategy.
 type GenerationalConfig struct {
 	// OldestN is the number of oldest turns to select per compression cycle.
 	// Defaults to 5.
 	OldestN int
 
-	// PromptTemplate is a Go text/template string that receives a
-	// promptData struct (ExistingSummary string, Turns []ConversationTurn).
-	// If empty, the built-in default is used.
-	PromptTemplate string
+	// PromptStore is a dotprompt source loader used to load and render the
+	// summarize prompt. In production, pass a *dp.DirStore pointing at the
+	// prompts/ directory. In tests, pass an in-memory implementation so no
+	// filesystem access is needed.
+	PromptStore dp.PromptStore
 }
 
 // defaultGenerationalConfig returns a GenerationalConfig with safe defaults.
+// The PromptStore is nil — callers must inject a real store before use, or
+// use NewGenerational which wires up the production DirStore.
 func defaultGenerationalConfig() GenerationalConfig {
 	return GenerationalConfig{
-		OldestN:        5,
-		PromptTemplate: defaultPromptTemplate,
+		OldestN: 5,
 	}
 }
 
@@ -104,14 +95,21 @@ type Generational struct {
 }
 
 // NewGenerational constructs a Generational strategy using a real genai-backed worker.
-// modelName and client are forwarded to the worker. If cfg.PromptTemplate is empty
-// the built-in default is applied automatically.
+// If cfg.OldestN is zero the default of 5 is applied. If cfg.PromptStore is nil,
+// a DirStore pointed at the prompts/ directory relative to the current working
+// directory is used.
 func NewGenerational(cfg GenerationalConfig, worker compressWorker) *Generational {
 	if cfg.OldestN <= 0 {
 		cfg.OldestN = 5
 	}
-	if cfg.PromptTemplate == "" {
-		cfg.PromptTemplate = defaultPromptTemplate
+	if cfg.PromptStore == nil {
+		store, err := dp.NewDirStore("prompts")
+		if err != nil {
+			// DirStore creation only fails on absolute path resolution; fall back
+			// gracefully — buildPrompt will return an error at render time.
+			store = nil
+		}
+		cfg.PromptStore = store
 	}
 	return &Generational{cfg: cfg, worker: worker}
 }
@@ -129,53 +127,80 @@ func (g *Generational) SelectCandidates(activeTurns []ConversationTurn, _ int) [
 	if n == 0 {
 		return []ConversationTurn{}
 	}
-	// Return a slice of the first n turns (oldest). Copies the slice header —
-	// does not copy underlying array so the caller should not mutate elements.
+	// Allocate a new backing array and copy the first n turns into it.
+	// Mutations to the returned slice do not affect activeTurns.
 	result := make([]ConversationTurn, n)
 	copy(result, activeTurns[:n])
 	return result
 }
 
-// promptData is passed to the prompt template engine.
-type promptData struct {
-	ExistingSummary string
-	Turns           []ConversationTurn
+// formatTurns renders conversation turns as a plain text block for use as the
+// "turns" input variable to the dotprompt template.
+func formatTurns(turns []ConversationTurn) string {
+	var sb strings.Builder
+	for _, t := range turns {
+		sb.WriteString("[")
+		sb.WriteString(t.Role)
+		sb.WriteString("]: ")
+		sb.WriteString(t.Content)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
-// buildPrompt renders the prompt template with existingSummary and turns.
-func (g *Generational) buildPrompt(existingSummary string, turns []ConversationTurn) string {
-	tmpl, err := template.New("compress").Parse(g.cfg.PromptTemplate)
-	if err != nil {
-		// Template parse error — fall back to a minimal safe prompt.
-		var sb strings.Builder
-		if existingSummary != "" {
-			sb.WriteString("Prior summary: ")
-			sb.WriteString(existingSummary)
-			sb.WriteString("\n")
-		}
-		for _, t := range turns {
-			sb.WriteString("[")
-			sb.WriteString(t.Role)
-			sb.WriteString("]: ")
-			sb.WriteString(t.Content)
-			sb.WriteString("\n")
-		}
-		return sb.String()
+// buildPrompt loads the summarize prompt from the PromptStore, renders it with
+// the given existingSummary and turns, and returns the rendered text.
+// Returns (string, error) — never falls back silently on load or render failure.
+func (g *Generational) buildPrompt(existingSummary string, turns []ConversationTurn) (string, error) {
+	if g.cfg.PromptStore == nil {
+		return "", fmt.Errorf("buildPrompt: PromptStore is nil — no prompt source available")
 	}
-	var buf bytes.Buffer
-	_ = tmpl.Execute(&buf, promptData{
-		ExistingSummary: existingSummary,
-		Turns:           turns,
-	})
-	return buf.String()
+
+	promptData, err := g.cfg.PromptStore.Load("summarize", dp.LoadPromptOptions{})
+	if err != nil {
+		return "", fmt.Errorf("buildPrompt: failed to load summarize prompt: %w", err)
+	}
+
+	engine := dp.NewDotprompt(nil)
+	promptFunc, err := engine.Compile(promptData.Source, nil)
+	if err != nil {
+		return "", fmt.Errorf("buildPrompt: failed to compile prompt template: %w", err)
+	}
+
+	input := map[string]any{
+		"turns": formatTurns(turns),
+	}
+	if existingSummary != "" {
+		input["existingSummary"] = existingSummary
+	}
+
+	rendered, err := promptFunc(&dp.DataArgument{Input: input}, nil)
+	if err != nil {
+		return "", fmt.Errorf("buildPrompt: failed to render prompt: %w", err)
+	}
+
+	// Extract text from rendered messages. dotprompt renders the template body
+	// as a single user-role message with one or more TextPart content items.
+	var sb strings.Builder
+	for _, msg := range rendered.Messages {
+		for _, part := range msg.Content {
+			if tp, ok := part.(*dp.TextPart); ok {
+				sb.WriteString(tp.Text)
+			}
+		}
+	}
+	return sb.String(), nil
 }
 
 // Compress invokes the compress worker to summarize candidates.
 // The effective model is determined by profile.GetEffectiveCompressModelID().
-// Returns (nil, error) if the worker fails — never a partial CompressResult.
+// Returns (nil, error) if buildPrompt or the worker fails — never a partial CompressResult.
 func (g *Generational) Compress(ctx context.Context, candidates []ConversationTurn, existingSummary string, profile ModelProfile) (*CompressResult, error) {
 	modelID := profile.GetEffectiveCompressModelID()
-	prompt := g.buildPrompt(existingSummary, candidates)
+	prompt, err := g.buildPrompt(existingSummary, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("compress: %w", err)
+	}
 
 	// Count original tokens from candidate turns.
 	originalTokens := 0

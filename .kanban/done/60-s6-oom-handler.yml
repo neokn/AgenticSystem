@@ -62,6 +62,8 @@ history:
     at: "2026-03-22T15:00:00+08:00"
   - stage: testing
     at: "2026-03-22T15:05:00+08:00"
+  - stage: review
+    at: "2026-03-22T15:10:00+08:00"
 description: '壓縮後仍不夠空間的最後手段。
 
 
@@ -207,3 +209,66 @@ comments:
       2. Issue 2 (emergencyThreshold not configurable) — added emergencyThreshold float64 parameter to newMemoryPluginWithDeps following same 0->default pattern as threshold. NewMemoryPlugin passes 0 (triggers defaultEmergencyThreshold=0.90). newOOMTestPlugin now passes emergencyThreshold via constructor parameter instead of direct struct mutation. plugin_test.go callers updated to pass 0 (default).
 
       All tests pass: go test -race ./internal/memory/ ok (88 tests).
+  - author: judge
+    at: "2026-03-22T15:10:00+08:00"
+    text: |-
+      ## Test Verification Report
+
+      **Verdict:** PASS
+
+      ### Acceptance Criteria Coverage
+      - [x] AC1: Secondary compression succeeds, precise_total < 90%, req.Contents updated — TestOOMHandler_TriggersSecondaryCompression_WhenAboveEmergencyThreshold. Now asserts exact structure: len(req.Contents)==2, last element is original user message "new message", first element is model-role "shorter secondary summary". Genuine structural check, not just non-empty.
+      - [x] AC2: OOMWarning returned as non-nil *model.LLMResponse, not Go error — TestOOMHandler_ReturnsOOMWarning_WhenSecondaryCompressionInsufficientAfterPrimary
+      - [x] AC3: Custom emergency threshold configurable — TestOOMHandler_UsesCustomEmergencyThreshold_WhenConfigured + TestOOMPlugin_DefaultEmergencyThreshold_Is90Percent
+      - [x] AC4: Empty SUMMARY skips compression, goes directly to OOMWarning — TestOOMHandler_SkipsSecondaryCompression_WhenSummaryIsEmpty calls handleOOM directly with empty p.summaries, asserts event.Reason contains "SUMMARY segment empty"
+      - [x] AC5: <5% reduction treated as maximally compressed, OOMWarning — TestOOMHandler_ReturnsOOMWarning_WhenSecondaryCompressionBelowMinReduction
+      - [x] AC6: Compress error degrades to OOMWarning + oom_event_count incremented — TestOOMHandler_ReturnsOOMWarning_WhenSecondaryCompressionFails
+
+      ### Jobs Should-Fix Fixes Verified
+      1. buildCompressedContents in handleOOM now passes 1 (not len(req.Contents)-1). plugin.go:478 confirmed.
+      2. emergencyThreshold is a constructor parameter of newMemoryPluginWithDeps (not direct struct mutation). newOOMTestPlugin passes it via constructor. plugin_test.go callers pass 0 (default).
+
+      ### Test Quality
+      - AAA structure: OK
+      - Naming: OK
+      - Pyramid: OK — 88 unit tests, fast and isolated
+      - Edge cases: All covered
+
+      ### Test Results
+      - Total: 88 tests
+      - Passed: 88
+      - Failed: 0
+
+      ### go vet
+      - Clean — no issues
+  - author: jobs
+    at: "2026-03-22T15:30:00+08:00"
+    text: |-
+      ## Re-Review by Jobs
+
+      **Overall Assessment:** LGTM
+      **Code Health Impact:** Improves
+
+      ### Fix 1 Verified — buildCompressedContents compressedCount
+
+      plugin.go:478 now reads:
+
+          req.Contents = buildCompressedContents(req, secondaryResult.CompressedText, 1)
+
+      The comment on line 476 correctly explains the intent: secondary compression replaces exactly one turn (the existing summary), so compressedCount=1 is right. The structural assertion in oom_test.go:178-194 is thorough — it checks exact element count (2), verifies the last element is the original user message with the expected text, and verifies the first element has model role and the secondary summary text. This directly guards the no-silent-truncation invariant.
+
+      ### Fix 2 Verified — emergencyThreshold constructor parameter
+
+      newMemoryPluginWithDeps (plugin.go:157-190) now accepts emergencyThreshold float64 as its last parameter. The 0->default pattern is applied correctly at line 172-174 (mirrors the primary threshold pattern). NewMemoryPlugin passes 0 (line 150). newOOMTestPlugin (oom_test.go:51) passes emergencyThreshold via constructor. plugin_test.go helpers pass 0. No direct struct mutation remains. The validation guard at line 175-177 correctly rejects out-of-range values.
+
+      ### No Regressions
+
+      Both fixes are clean, narrow, and do not touch unrelated code. 88 tests pass with -race.
+
+      ### Good Things
+
+      - The fix comment at plugin.go:476 precisely states the invariant ("replaces exactly the existing summary turn (1 turn)"), making the intent self-documenting for future readers.
+      - The AC1 structural assertion is exactly what was missing — it verifies the shape of the result, not just non-emptiness. The inline comment explaining the element count arithmetic is a helpful audit trail.
+      - The 0->default pattern is applied consistently between threshold and emergencyThreshold, keeping the constructor contract uniform.
+
+      Approved.

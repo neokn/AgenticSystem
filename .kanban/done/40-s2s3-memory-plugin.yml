@@ -71,6 +71,9 @@ history:
   - stage: testing
     at: "2026-03-22T12:10:00+08:00"
     note: 'james: bug fixes complete — 3 bugs + 2 should-fix items resolved'
+  - stage: review
+    at: "2026-03-22T12:13:00+08:00"
+    note: 'judge: all 3 bugs + 2 should-fix items verified — 84 tests pass, go test -race clean'
 description: "Implement the ADK MemoryPlugin in internal/memory/plugin.go. This is the central\norchestrator for the context window memory manager. It has two responsibilities:\n\n1. AfterModelCallback — store resp.UsageMetadata.TotalTokenCount as lastTotalTokens.\n   This single integer is the baseline for the next turn's estimation.\n\n2. BeforeModelCallback — two-layer token estimation and compression trigger:\n   - Offline (cheap): estimated = lastTotalTokens + genai/tokenizer.CountTokens(new_msg) + max_output_tokens\n   - If estimated < threshold: pass through (never call countTokens API)\n   - If estimated >= threshold: call countTokens API for precise_total\n     - If precise_total < threshold: pass through (false alarm, log it)\n     - If precise_total >= threshold: trigger compression\n\nCompression trigger:\n- Call CompressStrategy.SelectCandidates(activeTurns, targetReclaimTokens)\n- Call CompressStrategy.Compress(candidates, existingSummary, profile)\n- Rewrite req.Contents: [system_prompt + summary + recent_active_turns + user_msg]\n- Update plugin.summaries and plugin.compressedUpToIndex\n\nDesign decisions:\n- Threshold default 80%, configurable at initialization\n- Offline estimator is intentionally conservative (over-triggers API rather than misses)\n- Session history is never mutated (req.Contents rewrite is a view transformation)\n- lastTotalTokens starts at 0 on first turn; formula still works correctly\n- All internal state protected by sync.Mutex for goroutine safety\n\nMetrics emitted (into MemoryMetrics struct):\n- lastTotalTokens (gauge)\n- usageRatio (gauge: lastTotalTokens / context_window_tokens)\n- countTokensAPICallCount (counter)\n- compressTriggerCount (counter)\n- compressReclaimedTokens (histogram entry per compression event)\n\nFile: internal/memory/plugin.go\n"
 tasks:
   - text: 'Define MemoryPlugin struct: fields client *genai.Client, layout MemoryLayout, strategy CompressStrategy, profile ModelProfile, threshold float64 (immutable deps); mu sync.Mutex, lastTotalTokens int, summaries []string, compressedUpToIndex int, metrics MemoryMetrics (mutable state — all under mu)'
@@ -418,3 +421,152 @@ comments:
       Existing test fix: TestBeforeModelCallback_ReclaimedTokensRecorded_WhenCompressionFires updated to use multi-turn request.
 
       Test results: 84 tests, all pass. go test -race: PASS.
+  - author: judge
+    at: "2026-03-22T12:13:00+08:00"
+    text: |-
+      ## Test Verification Report (Re-verification)
+
+      **Verdict:** PASS
+
+      ### Bug Fixes Verified
+
+      **Bug 1 — activeTurns excludes new user message:**
+      - plugin.go:362 — `contentsToTurns(req.Contents[:len(req.Contents)-1])` — CONFIRMED
+      - Test: TestTriggerCompression_NewUserMessageNotInCandidates_WhenCompressionFires — PASS
+      - captureSelectStrategy captures activeTurns passed to SelectCandidates; asserts new user text "brand new user message" is absent from all captured turns
+
+      **Bug 2 — countMsgTokens conservative fallback on error:**
+      - plugin.go:539-546 — returns p.profile.MaxOutputTokens (8192) on tokenizer error — CONFIRMED
+      - Comment corrected from "Returns 0 on error (conservative)" to accurate description
+      - Tests: TestCountMsgTokens_ReturnsMaxOutputTokens_WhenTokenizerErrors, TestBeforeModelCallback_TriggersAPICall_WhenTokenizerErrors — both PASS
+
+      **Bug 3 — no system prompt duplication in buildCompressedContents:**
+      - plugin.go:606-610 — guard: only prepend Config.SystemInstruction if it is not already contents[0] (pointer equality check) — CONFIRMED
+      - Tests: TestBuildCompressedContents_NoSystemPromptDuplication_WhenSystemInstructionAlreadyInContents, TestBuildCompressedContents_IncludesSystemPrompt_WhenNotAlreadyInContents — both PASS
+
+      ### Should-Fix Items Verified
+
+      **Should-fix 1 — BuildPlugin returns (*plugin.Plugin, error):**
+      - plugin.go:187 — signature `func (p *MemoryPlugin) BuildPlugin() (*plugin.Plugin, error)` — CONFIRMED
+      - Error from plugin.New propagated; test TestMemoryPlugin_BuildPlugin_ReturnsNonNilPlugin uses two-value return — CONFIRMED
+
+      **Should-fix 2 — exact req.Contents structure assertion after compression:**
+      - Test: TestBeforeModelCallback_ReqContentsExactStructure_AfterCompression — CONFIRMED
+      - Asserts: last element is new user message, user message appears exactly once, summary turn (role model) present before new user message, order invariant enforced
+
+      ### OOM Test Note
+
+      TestBeforeModelCallback_ReclaimedTokensRecorded_WhenCompressionFires (oom_test.go) — PASS
+      James updated this test to use a multi-turn request; it is no longer failing. Card 60 issue is resolved at the test level without blocking card 40.
+
+      ### Test Results
+
+      - Total: 84 tests
+      - Passed: 84
+      - Failed: 0
+      - go test -race ./internal/memory/: PASS
+      - go vet ./internal/memory/: PASS (no issues)
+
+      ### Acceptance Criteria Coverage
+
+      - [x] AC1: AfterModelCallback stores lastTotalTokens
+      - [x] AC2: Short conv below threshold — no API call
+      - [x] AC3: Offline >= threshold, precise >= threshold → compress triggered with correct req.Contents structure
+      - [x] AC4: False alarm (offline >= threshold, precise < threshold) → pass through
+      - [x] AC5: First turn (lastTotalTokens==0) → formula valid
+      - [x] AC6: Nil/zero UsageMetadata → lastTotalTokens not overwritten
+      - [x] AC7: Goroutine safety — go test -race passes
+      - [x] AC8: Configurable threshold respected
+
+      All criteria verified. All tests green. Card approved for review.
+  - author: jobs
+    at: "2026-03-22T16:00:00+08:00"
+    text: |-
+      ## Re-Review by Jobs — Fix Verification
+
+      **Overall Assessment:** LGTM
+      **Code Health Impact:** Improves
+
+      ---
+
+      ### Bug 1 Verification — activeTurns excludes new user message
+
+      `plugin.go:362` — `contentsToTurns(req.Contents[:len(req.Contents)-1])` — FIXED. The slice is correctly truncated before being passed to SelectCandidates. The new user message is definitively excluded from compression candidates.
+
+      Test `TestTriggerCompression_NewUserMessageNotInCandidates_WhenCompressionFires` — the `captureSelectStrategy` wrapper deep-copies the activeTurns slice passed to SelectCandidates and then asserts no captured turn has content equal to the new user message text. The assertion is correct and will fail under the old code. Fix verified.
+
+      ---
+
+      ### Bug 2 Verification — countMsgTokens conservative fallback on tokenizer error
+
+      `plugin.go:539-548` — on tokenizer error, the function now returns `p.profile.MaxOutputTokens` (8192) instead of 0. The inline comment reads: "Returns p.profile.MaxOutputTokens on tokenizer error — a conservative fallback that intentionally over-estimates so the second layer API call is always triggered rather than silently skipped." Comment is factually correct and matches the behavior. FIXED.
+
+      Two new tests:
+      - `TestCountMsgTokens_ReturnsMaxOutputTokens_WhenTokenizerErrors` — directly calls `countMsgTokens` with a failing stub and asserts the returned value equals `p.profile.MaxOutputTokens` and is non-zero. Correct.
+      - `TestBeforeModelCallback_TriggersAPICall_WhenTokenizerErrors` — constructs a scenario where the conservative fallback causes the offline estimate to cross the threshold, asserting at least one API call is made. Correct end-to-end coverage.
+
+      Fix verified.
+
+      ---
+
+      ### Bug 3 Verification — system prompt duplication guard in buildCompressedContents
+
+      `plugin.go:606-610` — pointer equality guard is present:
+      ```go
+      alreadyFirst := len(contents) > 0 && contents[0] == req.Config.SystemInstruction
+      if \!alreadyFirst {
+          result = append(result, req.Config.SystemInstruction)
+      }
+      ```
+      The guard uses `==` on `*genai.Content` pointers, which is exactly what ADK does when it materialises `Config.SystemInstruction` as `contents[0]` — same pointer, not a copy. The condition correctly prevents double-prepend in that case while still prepending when the instruction is absent from Contents. FIXED.
+
+      Two tests:
+      - `TestBuildCompressedContents_NoSystemPromptDuplication_WhenSystemInstructionAlreadyInContents` — places the same pointer in both `Config.SystemInstruction` and `Contents[0]`, then counts pointer occurrences in result. Asserts <= 1. Correct.
+      - `TestBuildCompressedContents_IncludesSystemPrompt_WhenNotAlreadyInContents` — places instruction in Config only, asserts it is `result[0]` and appears exactly once. Correct.
+
+      Fix verified.
+
+      ---
+
+      ### Should-Fix 1 Verification — BuildPlugin returns (*plugin.Plugin, error)
+
+      `plugin.go:187-197` — BuildPlugin now has signature `func (p *MemoryPlugin) BuildPlugin() (*plugin.Plugin, error)`. The error from `plugin.New` is propagated. The test `TestMemoryPlugin_BuildPlugin_ReturnsNonNilPlugin` asserts `err \!= nil` fatals and checks the returned plugin is non-nil with the correct name. FIXED.
+
+      ---
+
+      ### Should-Fix 2 Verification — exact req.Contents structure after compression
+
+      `TestBeforeModelCallback_ReqContentsExactStructure_AfterCompression` (plugin_test.go:820-923) — the test constructs a request with 4 prior turns + 1 new user message, triggers compression, then asserts:
+      1. Last element is the original `newUserMsg` pointer (correct identity check, not just value).
+      2. `newUserMsg` appears exactly once.
+      3. A summary turn with role "model" and the correct text is present.
+      4. summaryIdx < newMsgIdx — summary precedes the new user message in the slice.
+
+      This covers the critical structural invariant [summary, recentActive..., userMsg]. FIXED.
+
+      One observation: the test uses `stub.candidates = nil` which means SelectCandidates returns all activeTurns (all 4 prior turns). With `compressedCount = 4` (len(candidates) == len(activeTurns)), recentActive is empty, so the result is `[summary, newUserMsg]`. This is a valid structure — not strictly [summary, recent1, recent2, userMsg] as described in the comment. The structural ordering invariant (summary before userMsg) is still verified. The test is correct and useful; the comment at line 823 slightly overstates what is being tested but does not harm correctness.
+
+      ---
+
+      ### Nits from previous review — not required, noting status
+
+      - `contentText` still uses `s += part.Text` string concatenation. Nit remains; not a blocker.
+      - `tc` / `ac` field names remain terse. Nit remains; not a blocker.
+      - `stubCompressStrategy.selectMu` still guards both `selectCalls` and `compressCalls`. Nit remains; not a blocker.
+
+      None of these were required changes. Not blocking approval.
+
+      ---
+
+      ### Good Things
+
+      - The `captureSelectStrategy` wrapper (embedding `stubCompressStrategy`) is an elegant test seam — it intercepts only the method under scrutiny without duplicating the full stub. Clean Go.
+      - The conservative fallback for Bug 2 is placed at the right abstraction level: inside `countMsgTokens`, not scattered across callers.
+      - The pointer equality guard for Bug 3 is the correct approach for this ADK idiom — value equality would be insufficient because it would require deep-comparing Content structs.
+      - 84 tests passing with `-race` is a strong signal. The race test `TestBeforeAndAfterModelCallback_NoConcurrentDataRace` with 20 goroutines provides genuine coverage.
+
+      ---
+
+      ### Summary
+
+      All 5 previously flagged items (3 bugs, 2 should-fix) are correctly and completely resolved. No new issues introduced. The implementation is ready to merge.

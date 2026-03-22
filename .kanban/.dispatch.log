@@ -209,3 +209,111 @@ zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].ym
 zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
 [2026-03-22T12:08:46+08:00] → judge: .kanban/testing/60-s6-oom-handler.yml (testing)
 .kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/40-s2s3-memory-plugin[james].yml
+[2026-03-22T12:11:37+08:00] → judge: .kanban/testing/40-s2s3-memory-plugin.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/testing/40-s2s3-memory-plugin[judge].yml
+zsh:1: no matches found: .kanban/testing/40-s2s3-memory-plugin[judge].yml
+zsh:1: no matches found: .kanban/testing/40-s2s3-memory-plugin[judge].yml
+zsh:1: no matches found: .kanban/testing/40-s2s3-memory-plugin[judge].yml
+zsh:1: no matches found: .kanban/testing/40-s2s3-memory-plugin[judge].yml
+zsh:1: no matches found: .kanban/testing/40-s2s3-memory-plugin[judge].yml
+[2026-03-22T12:14:03+08:00] → jobs: .kanban/review/40-s2s3-memory-plugin.yml (review)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jobs: No such file or directory
+zsh:1: no matches found: .kanban/review/40-s2s3-memory-plugin[jobs].yml
+zsh:1: no matches found: .kanban/review/40-s2s3-memory-plugin[jobs].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+[2026-03-22T12:15:28+08:00] → judge: .kanban/testing/60-s6-oom-handler.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/review/40-s2s3-memory-plugin[jobs].yml
+zsh:1: no matches found: .kanban/review/40-s2s3-memory-plugin[jobs].yml
+zsh:1: no matches found: .kanban/review/40-s2s3-memory-plugin[jobs].yml
+zsh:1: no matches found: .kanban/review/40-s2s3-memory-plugin[jobs].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+[2026-03-22T12:17:21+08:00] → jobs: .kanban/review/60-s6-oom-handler.yml (review)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jobs: No such file or directory
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/60-s6-oom-handler[james].yml
+[2026-03-22T12:21:42+08:00] → judge: .kanban/testing/60-s6-oom-handler.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/in-progress/backend/70-demo-agent[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/70-demo-agent[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/70-demo-agent[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/70-demo-agent[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/70-demo-agent[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/70-demo-agent[james].yml
+[2026-03-22T12:22:26+08:00] → judge: .kanban/testing/70-demo-agent.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/70-demo-agent[judge].yml
+zsh:1: no matches found: .kanban/testing/70-demo-agent[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+zsh:1: no matches found: .kanban/testing/60-s6-oom-handler[judge].yml
+[2026-03-22T12:23:32+08:00] → jobs: .kanban/review/60-s6-oom-handler.yml (review)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jobs: No such file or directory
+zsh:1: no matches found: .kanban/testing/70-demo-agent[judge].yml
+zsh:1: no matches found: .kanban/testing/70-demo-agent[judge].yml
+zsh:1: no matches found: .kanban/testing/70-demo-agent[judge].yml
+zsh:1: no matches found: .kanban/testing/70-demo-agent[judge].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/60-s6-oom-handler[jobs].yml
+zsh:1: no matches found: .kanban/review/70-demo-agent[jobs].yml
+zsh:1: no matches found: .kanban/review/70-demo-agent[jobs].yml
+zsh:1: no matches found: .kanban/review/70-demo-agent[jobs].yml
+zsh:1: no matches found: .kanban/review/70-demo-agent[jobs].yml
+zsh:1: no matches found: .kanban/review/70-demo-agent[jobs].yml
+zsh:1: no matches found: .kanban/review/70-demo-agent[jobs].yml
+[2026-03-22T12:41:20+08:00] → jules: .kanban/backlog/90-review-polish-items.yml (backlog)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jules: No such file or directory
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+zsh:1: no matches found: .kanban/backlog/80-dotprompt-integration[jules].yml
+[2026-03-22T12:44:06+08:00] → jensen: .kanban/refined/90-review-polish-items.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/jensen: No such file or directory
+zsh:1: no matches found: .kanban/backlog/90-review-polish-items[jules].yml
+zsh:1: no matches found: .kanban/backlog/90-review-polish-items[jules].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+zsh:1: no matches found: .kanban/in-progress/backend/80-dotprompt-integration[james].yml
+[2026-03-22T12:48:39+08:00] → judge: .kanban/testing/80-dotprompt-integration.yml (testing)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/judge: No such file or directory
