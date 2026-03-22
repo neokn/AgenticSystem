@@ -67,8 +67,34 @@ func NewRegistry(customProfiles ...ModelProfile) (*Registry, error) {
 }
 
 // builtinProfiles is the package-level list of built-in Gemini model profiles.
-// Declared as a composite literal (not init()) to keep data visible in tests.
-var builtinProfiles = []ModelProfile{}
+// Declared as a composite literal (not init()) to keep data visible in tests
+// and to avoid init() ordering surprises.
+var builtinProfiles = []ModelProfile{
+	{
+		ModelID:             "gemini-2.0-flash",
+		Provider:            "google",
+		ContextWindowTokens: 1048576,
+		MaxOutputTokens:     8192,
+	},
+	{
+		ModelID:             "gemini-2.0-flash-lite",
+		Provider:            "google",
+		ContextWindowTokens: 1048576,
+		MaxOutputTokens:     8192,
+	},
+	{
+		ModelID:             "gemini-2.5-pro",
+		Provider:            "google",
+		ContextWindowTokens: 1048576,
+		MaxOutputTokens:     65536,
+	},
+	{
+		ModelID:             "gemini-2.5-flash",
+		Provider:            "google",
+		ContextWindowTokens: 1048576,
+		MaxOutputTokens:     65536,
+	},
+}
 
 // GetProfile returns the ModelProfile for the given model ID.
 // Returns ErrModelNotFound if the model ID is not in the registry.
