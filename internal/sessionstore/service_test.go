@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -227,9 +226,6 @@ func TestAppendEvent_should_persist_and_replay_events(t *testing.T) {
 	}
 
 	ev := resp.Session.Events().At(0)
-	if ev.Author != "user" {
-		t.Errorf("want author=user, got %s", ev.Author)
-	}
 	if ev.Content == nil || len(ev.Content.Parts) == 0 || ev.Content.Parts[0].Text != "hello" {
 		t.Errorf("want text=hello, got %v", ev.Content)
 	}
@@ -397,71 +393,62 @@ func TestGet_should_apply_num_recent_events_filter(t *testing.T) {
 	}
 }
 
-func TestGet_should_apply_after_filter(t *testing.T) {
-	svc := newService(t)
+func TestAppendEvent_should_only_persist_content(t *testing.T) {
+	dir := newTempDir(t)
+	svc := sessionstore.NewJSONLService(dir)
 	sess := createSession(t, svc, "myapp", "user1", "sess1")
 
-	cutoff := time.Now()
-	time.Sleep(time.Millisecond) // ensure events after cutoff have later timestamps
-
-	// One event before cutoff
-	evOld := makeTextEvent("user", "old")
-	evOld.Timestamp = cutoff.Add(-time.Second) // force old timestamp
-
-	// One event after cutoff
-	evNew := makeTextEvent("agent", "new")
-	evNew.Timestamp = cutoff.Add(time.Second) // force new timestamp
-
-	_ = svc.AppendEvent(context.Background(), sess, evOld)
-	_ = svc.AppendEvent(context.Background(), sess, evNew)
-
-	resp, err := svc.Get(context.Background(), &session.GetRequest{
-		AppName:   "myapp",
-		UserID:    "user1",
-		SessionID: "sess1",
-		After:     cutoff,
-	})
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if resp.Session.Events().Len() != 1 {
-		t.Errorf("want 1 event after cutoff, got %d", resp.Session.Events().Len())
-	}
-}
-
-func TestAppendEvent_should_strip_temp_keys_from_state_delta(t *testing.T) {
-	svc := newService(t)
-	sess := createSession(t, svc, "myapp", "user1", "sess1")
-
-	ev := session.NewEvent("inv-1")
-	ev.Author = "agent"
-	ev.Actions.StateDelta = map[string]any{
-		"temp:scratch": "should be stripped",
-		"keep":         "should remain",
-	}
+	ev := makeTextEvent("agent", "hello world")
+	ev.Actions.StateDelta = map[string]any{"key": "should not be persisted"}
 
 	if err := svc.AppendEvent(context.Background(), sess, ev); err != nil {
 		t.Fatalf("AppendEvent: %v", err)
 	}
 
-	resp, err := svc.Get(context.Background(), &session.GetRequest{
-		AppName:   "myapp",
-		UserID:    "user1",
-		SessionID: "sess1",
-	})
+	// Read raw JSONL and verify only Content is present.
+	raw, err := os.ReadFile(filepath.Join(dir, "sess1.jsonl"))
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("read jsonl: %v", err)
+	}
+	line := strings.TrimSpace(string(raw))
+	if strings.Contains(line, "StateDelta") {
+		t.Error("JSONL should not contain StateDelta")
+	}
+	if strings.Contains(line, "Author") {
+		t.Error("JSONL should not contain Author")
+	}
+	if strings.Contains(line, `"Content":{`) {
+		t.Error("JSONL should not have Content wrapper — store genai.Content directly")
+	}
+	if !strings.Contains(line, "hello world") {
+		t.Error("JSONL should contain Content text")
+	}
+}
+
+func TestAppendEvent_should_strip_thought_signatures(t *testing.T) {
+	dir := newTempDir(t)
+	svc := sessionstore.NewJSONLService(dir)
+	sess := createSession(t, svc, "myapp", "user1", "sess1")
+
+	ev := makeTextEvent("agent", "thinking reply")
+	ev.Content.Parts = append(ev.Content.Parts, &genai.Part{
+		Thought:          true,
+		ThoughtSignature: []byte("opaque-sig-bytes"),
+	})
+
+	if err := svc.AppendEvent(context.Background(), sess, ev); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
 	}
 
-	if resp.Session.Events().Len() != 1 {
-		t.Fatalf("want 1 event, got %d", resp.Session.Events().Len())
+	raw, err := os.ReadFile(filepath.Join(dir, "sess1.jsonl"))
+	if err != nil {
+		t.Fatalf("read jsonl: %v", err)
 	}
-
-	ev0 := resp.Session.Events().At(0)
-	if _, ok := ev0.Actions.StateDelta["temp:scratch"]; ok {
-		t.Error("temp:scratch key should have been stripped from StateDelta")
+	line := strings.TrimSpace(string(raw))
+	if strings.Contains(line, "thoughtSignature") {
+		t.Error("JSONL should not contain thoughtSignature")
 	}
-	if _, ok := ev0.Actions.StateDelta["keep"]; !ok {
-		t.Error("keep key should be present in StateDelta")
+	if !strings.Contains(line, "thinking reply") {
+		t.Error("JSONL should still contain text content")
 	}
 }

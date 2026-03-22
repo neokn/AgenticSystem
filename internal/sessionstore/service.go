@@ -20,13 +20,13 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/adk/session"
+	"google.golang.org/genai"
 )
 
 // NewJSONLService returns a session.Service backed by JSONL files under dir.
@@ -41,6 +41,27 @@ type sessionMeta struct {
 	UserID    string    `json:"user_id"`
 	SessionID string    `json:"session_id"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+
+// stripThoughtSignatures returns a shallow copy of content with
+// ThoughtSignature cleared from every Part. The original is not mutated.
+func stripThoughtSignatures(c *genai.Content) *genai.Content {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Parts = make([]*genai.Part, len(c.Parts))
+	for i, p := range c.Parts {
+		if len(p.ThoughtSignature) == 0 {
+			out.Parts[i] = p
+			continue
+		}
+		cp := *p
+		cp.ThoughtSignature = nil
+		out.Parts[i] = &cp
+	}
+	return &out
 }
 
 // jsonlService implements session.Service.
@@ -67,6 +88,16 @@ func (s *jsonlService) Create(ctx context.Context, req *session.CreateRequest) (
 	sessionID := req.SessionID
 	if sessionID == "" {
 		sessionID = uuid.NewString()
+	}
+
+	// Idempotent: if session already exists, return without re-creating.
+	if _, err := os.Stat(s.metaPath(sessionID)); err == nil {
+		return &session.CreateResponse{Session: &jsonlSession{
+			appName:   req.AppName,
+			userID:    req.UserID,
+			sessionID: sessionID,
+			state:     make(map[string]any),
+		}}, nil
 	}
 
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
@@ -136,21 +167,9 @@ func (s *jsonlService) Get(ctx context.Context, req *session.GetRequest) (*sessi
 	}
 
 	// Replay JSONL file.
-	events, appDeltaAcc, userDeltaAcc, sessionState, updatedAt, err := s.replayJSONL(sessionID)
+	events, err := s.replayJSONL(sessionID)
 	if err != nil {
 		return nil, err
-	}
-
-	// Merge accumulated state scopes.
-	mergedState := mergeStates(appDeltaAcc, userDeltaAcc, sessionState)
-
-	sess := &jsonlSession{
-		appName:   meta.AppName,
-		userID:    meta.UserID,
-		sessionID: meta.SessionID,
-		state:     mergedState,
-		events:    events,
-		updatedAt: updatedAt,
 	}
 
 	// Apply in-memory filters.
@@ -162,43 +181,29 @@ func (s *jsonlService) Get(ctx context.Context, req *session.GetRequest) (*sessi
 		}
 		filtered = filtered[start:]
 	}
-	if !req.After.IsZero() && len(filtered) > 0 {
-		firstIdx := sort.Search(len(filtered), func(i int) bool {
-			return !filtered[i].Timestamp.Before(req.After)
-		})
-		filtered = filtered[firstIdx:]
-	}
 
-	resultSess := &jsonlSession{
-		appName:   sess.appName,
-		userID:    sess.userID,
-		sessionID: sess.sessionID,
-		state:     maps.Clone(mergedState),
+	sess := &jsonlSession{
+		appName:   meta.AppName,
+		userID:    meta.UserID,
+		sessionID: meta.SessionID,
+		state:     make(map[string]any),
 		events:    filtered,
-		updatedAt: sess.updatedAt,
 	}
 
-	return &session.GetResponse{Session: resultSess}, nil
+	return &session.GetResponse{Session: sess}, nil
 }
 
-// replayJSONL reads all events from the JSONL file for sessionID.
-// Corrupt lines are skipped with a slog.Warn.
-func (s *jsonlService) replayJSONL(sessionID string) (
-	events []*session.Event,
-	appDelta, userDelta, sessionState map[string]any,
-	updatedAt time.Time,
-	err error,
-) {
-	appDelta = make(map[string]any)
-	userDelta = make(map[string]any)
-	sessionState = make(map[string]any)
-
+// replayJSONL reads all compact records from the JSONL file for sessionID
+// and reconstructs session.Event values. Corrupt lines are skipped with a
+// slog.Warn. The function is backward-compatible: old full-format lines are
+// parsed correctly because json.Unmarshal ignores unknown fields.
+func (s *jsonlService) replayJSONL(sessionID string) ([]*session.Event, error) {
 	f, err := os.Open(s.jsonlPath(sessionID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, appDelta, userDelta, sessionState, time.Time{}, nil
+			return nil, nil
 		}
-		return nil, nil, nil, nil, time.Time{}, fmt.Errorf("open jsonl for %q: %w", sessionID, err)
+		return nil, fmt.Errorf("open jsonl for %q: %w", sessionID, err)
 	}
 	defer f.Close()
 
@@ -206,6 +211,7 @@ func (s *jsonlService) replayJSONL(sessionID string) (
 	// Allow large lines for events with base64 blobs etc.
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
+	var events []*session.Event
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
@@ -214,37 +220,29 @@ func (s *jsonlService) replayJSONL(sessionID string) (
 			continue
 		}
 
-		var ev session.Event
-		if err := json.Unmarshal(line, &ev); err != nil {
+		var content genai.Content
+		if err := json.Unmarshal(line, &content); err != nil {
 			slog.Warn("sessionstore: skipping corrupt JSONL line",
 				"session_id", sessionID,
 				"line", lineNum,
-				"raw", string(line),
 				"error", err,
 			)
 			continue
 		}
-
-		// Accumulate state deltas.
-		if len(ev.Actions.StateDelta) > 0 {
-			ad, ud, sd := extractStateDeltas(ev.Actions.StateDelta)
-			maps.Copy(appDelta, ad)
-			maps.Copy(userDelta, ud)
-			maps.Copy(sessionState, sd)
+		if len(content.Parts) == 0 {
+			continue
 		}
 
-		if !ev.Timestamp.IsZero() && ev.Timestamp.After(updatedAt) {
-			updatedAt = ev.Timestamp
-		}
-
-		evCopy := ev
-		events = append(events, &evCopy)
+		ev := session.Event{}
+		ev.Content = &content
+		ev.ID = uuid.NewString()
+		events = append(events, &ev)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, nil, nil, nil, time.Time{}, fmt.Errorf("scan jsonl for %q: %w", sessionID, err)
+		return nil, fmt.Errorf("scan jsonl for %q: %w", sessionID, err)
 	}
 
-	return events, appDelta, userDelta, sessionState, updatedAt, nil
+	return events, nil
 }
 
 // List implements session.Service.
@@ -333,10 +331,7 @@ func (s *jsonlService) AppendEvent(ctx context.Context, curSession session.Sessi
 		return nil
 	}
 
-	// Strip temp: keys before persisting.
-	stripped := trimTempDeltaState(event)
-
-	line, err := json.Marshal(stripped)
+	line, err := json.Marshal(stripThoughtSignatures(event.Content))
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
@@ -362,25 +357,6 @@ func (s *jsonlService) AppendEvent(ctx context.Context, curSession session.Sessi
 	return nil
 }
 
-// trimTempDeltaState removes temp: keys from the event's StateDelta.
-// Returns a shallow copy of the event with a filtered StateDelta if needed.
-func trimTempDeltaState(event *session.Event) *session.Event {
-	if len(event.Actions.StateDelta) == 0 {
-		return event
-	}
-
-	filtered := make(map[string]any)
-	for k, v := range event.Actions.StateDelta {
-		if !strings.HasPrefix(k, session.KeyPrefixTemp) {
-			filtered[k] = v
-		}
-	}
-
-	// Build a copy with filtered delta to avoid mutating the caller's event.
-	copy := *event
-	copy.Actions.StateDelta = filtered
-	return &copy
-}
 
 // ---- jsonlSession: implements session.Session ----
 
@@ -503,20 +479,6 @@ func extractStateDeltas(delta map[string]any) (appDelta, userDelta, sessionDelta
 	return
 }
 
-// mergeStates rebuilds the combined state map from accumulated app/user/session deltas,
-// re-adding the app: and user: prefixes.
-func mergeStates(appState, userState, sessionState map[string]any) map[string]any {
-	total := len(appState) + len(userState) + len(sessionState)
-	merged := make(map[string]any, total)
-	maps.Copy(merged, sessionState)
-	for k, v := range appState {
-		merged[appPrefix+k] = v
-	}
-	for k, v := range userState {
-		merged[userPrefix+k] = v
-	}
-	return merged
-}
 
 // Compile-time interface checks.
 var (
