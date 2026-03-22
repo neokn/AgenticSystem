@@ -160,11 +160,6 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 	}
 	profile.CompressModelID = "gemini-3.1-flash-lite-preview"
 
-	// TEMP: shrink context window to trigger compression quickly for testing.
-	// Remove after verification.
-	profile.ContextWindowTokens = 2000
-	profile.MaxOutputTokens = 512
-
 	// Step 3: CompressStrategy (Generational with real GenaiWorker)
 	worker := memory.NewGenaiWorker(genaiClient)
 	strategy := memory.NewGenerational(memory.GenerationalConfig{}, worker, profile)

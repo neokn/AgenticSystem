@@ -64,11 +64,6 @@ func run() error {
 	}
 	profile.CompressModelID = "gemini-3.1-flash-lite-preview"
 
-	// TEMP: shrink context window to trigger compression quickly for testing.
-	// Remove after verification.
-	profile.ContextWindowTokens = 2000
-	profile.MaxOutputTokens = 512
-
 	// --- compress strategy ---
 	worker := memory.NewGenaiWorker(genaiClient)
 	strategy := memory.NewGenerational(memory.GenerationalConfig{}, worker, profile)

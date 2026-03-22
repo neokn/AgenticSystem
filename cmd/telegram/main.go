@@ -139,7 +139,7 @@ func runBot(ctx context.Context) error {
 
 	// --- Telegram bot ---
 	handler := func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message == nil || update.Message.Text == "" {
+		if update.Message == nil || update.Message.Text == "" || update.Message.From == nil {
 			return
 		}
 
