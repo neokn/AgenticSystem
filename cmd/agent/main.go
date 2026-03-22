@@ -157,22 +157,17 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 	}
 	profile.CompressModelID = "gemini-3.1-flash-lite-preview"
 
-	// Step 3: MemoryLayout with default config
-	layoutCfg, err := memory.DefaultLayoutConfig()
-	if err != nil {
-		return fmt.Errorf("failed to load default layout config: %w", err)
-	}
-	layout, err := memory.NewLayout(profile, layoutCfg)
-	if err != nil {
-		return fmt.Errorf("failed to create memory layout: %w", err)
-	}
+	// TEMP: shrink context window to trigger compression quickly for testing.
+	// Remove after verification.
+	profile.ContextWindowTokens = 2000
+	profile.MaxOutputTokens = 512
 
-	// Step 4: CompressStrategy (Generational with real GenaiWorker)
+	// Step 3: CompressStrategy (Generational with real GenaiWorker)
 	worker := memory.NewGenaiWorker(genaiClient)
-	strategy := memory.NewGenerational(memory.GenerationalConfig{OldestN: 5}, worker)
+	strategy := memory.NewGenerational(memory.GenerationalConfig{}, worker, profile)
 
-	// Step 5: MemoryPlugin
-	memPlugin, err := memory.NewMemoryPlugin(genaiClient, layout, strategy, profile, 0)
+	// Step 4: MemoryPlugin
+	memPlugin, err := memory.NewMemoryPlugin(genaiClient, strategy, profile, 0)
 	if err != nil {
 		return fmt.Errorf("failed to create memory plugin: %w", err)
 	}

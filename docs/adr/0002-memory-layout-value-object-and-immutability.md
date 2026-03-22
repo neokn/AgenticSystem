@@ -1,6 +1,6 @@
 # ADR-0002: MemoryLayout as an Immutable Value Object with Unexported Fields
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0004
 **Date:** 2026-03-22
 **Authors:** Jensen (J-Team Architect)
 

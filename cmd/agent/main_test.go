@@ -187,54 +187,6 @@ func Test_should_build_small_profile_for_oom_scenario(t *testing.T) {
 	}
 }
 
-// should_assemble_memory_layout_with_default_config verifies that all memory
-// components assemble correctly using the dependency injection pattern from ADR-0003.
-// Assembles MemoryLayout using real memory types without a genai.Client — no API key required.
-func Test_should_assemble_memory_layout_with_default_config(t *testing.T) {
-	// Arrange
-	profile := memory.ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		Provider:            "google",
-		ContextWindowTokens: 1048576,
-		MaxOutputTokens:     8192,
-	}
-
-	// Act
-	cfg, err := memory.DefaultLayoutConfig()
-	if err != nil {
-		t.Fatalf("DefaultLayoutConfig failed: %v", err)
-	}
-	layout, err := memory.NewLayout(profile, cfg)
-
-	// Assert
-	if err != nil {
-		t.Fatalf("NewLayout failed: %v", err)
-	}
-	if layout.Total() != profile.ContextWindowTokens {
-		t.Errorf("expected layout.Total()=%d, got %d", profile.ContextWindowTokens, layout.Total())
-	}
-}
-
-// should_assemble_memory_layout_for_oom_scenario verifies that NewLayout
-// accepts a 2000-token context window (OOM test scenario).
-func Test_should_assemble_memory_layout_for_oom_scenario(t *testing.T) {
-	// Arrange
-	profile := buildOOMTestProfile()
-
-	// Act
-	cfg, err := memory.DefaultLayoutConfig()
-	if err != nil {
-		t.Fatalf("DefaultLayoutConfig failed: %v", err)
-	}
-	_, err = memory.NewLayout(profile, cfg)
-
-	// Assert: layout creation must fail gracefully or succeed;
-	// either way it must not panic. With MaxOutputTokens > ContextWindowTokens
-	// it should return an error, not panic.
-	// We just verify no panic by reaching this point.
-	_ = err // error is acceptable for an intentionally tiny window
-}
-
 // ---------------------------------------------------------------------------
 // Task 5: writeMetricsToFile
 // ---------------------------------------------------------------------------

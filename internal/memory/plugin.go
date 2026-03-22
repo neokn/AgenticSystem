@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -101,6 +102,39 @@ type MemoryMetrics struct {
 	// Each increment represents a conversation that could not be reclaimed by
 	// compression and required the user to start a new conversation.
 	OOMEventCount int
+
+	// SubSessions is a snapshot of the subsession history. Populated by GetSnapshot.
+	SubSessions []SubSession
+}
+
+// SubSession represents a generation boundary in the conversation. Each time
+// compression fires, the current active subsession is closed and a new one
+// begins with the compressed summary as its starting context.
+type SubSession struct {
+	// Generation is the zero-based index of this subsession. Generation 0 is
+	// the original uncompressed conversation.
+	Generation int
+
+	// StartTurn is the turn index (in the full session history) where this
+	// subsession begins. For generation 0, this is 0.
+	StartTurn int
+
+	// EndTurn is the turn index where this subsession ends (exclusive).
+	// -1 means this is the active (current) subsession.
+	EndTurn int
+
+	// Summary is the compressed text produced when this subsession was closed.
+	// Empty for the active subsession and for generation 0 (no prior summary).
+	Summary string
+
+	// CreatedAt is when this subsession was created (compression timestamp).
+	CreatedAt time.Time
+
+	// TokensBefore is the token count of the candidates before compression.
+	TokensBefore int
+
+	// TokensAfter is the token count of the summary after compression.
+	TokensAfter int
 }
 
 // MemoryPlugin is the ADK plugin that tracks token usage and triggers compression
@@ -117,18 +151,17 @@ type MemoryPlugin struct {
 	// Immutable after construction.
 	tc                 tokenCounter
 	ac                 apiTokenCounter
-	layout             MemoryLayout
 	strategy           CompressStrategy
 	profile            ModelProfile
 	threshold          float64
 	emergencyThreshold float64 // OOM handler fires when precise_total >= this fraction of context window
 
 	// Mutable state — all reads and writes under mu.
-	mu                  sync.Mutex
-	lastTotalTokens     int
-	summaries           []string
-	compressedUpToIndex int
-	metrics             MemoryMetrics
+	mu               sync.Mutex
+	lastTotalTokens  int
+	subSessions      []SubSession  // generation history; last element is always the active subsession
+	metrics          MemoryMetrics
+	lastCompressInfo *compressInfo // set by triggerCompression, consumed by afterModelCallback
 }
 
 // NewMemoryPlugin constructs a MemoryPlugin using the real genai.Client for both
@@ -139,7 +172,6 @@ type MemoryPlugin struct {
 // one client, one connection. See ADR-0003.
 func NewMemoryPlugin(
 	client *genai.Client,
-	layout MemoryLayout,
 	strategy CompressStrategy,
 	profile ModelProfile,
 	threshold float64,
@@ -162,7 +194,7 @@ func NewMemoryPlugin(
 			return nil, fmt.Errorf("NewMemoryPlugin: creating fallback local tokenizer: %w", err)
 		}
 	}
-	return newMemoryPluginWithDeps(tok, &genaiAPICounter{client: client}, layout, strategy, profile, threshold, 0)
+	return newMemoryPluginWithDeps(tok, &genaiAPICounter{client: client}, strategy, profile, threshold, 0)
 }
 
 // newMemoryPluginWithDeps is the internal constructor used by both NewMemoryPlugin
@@ -172,7 +204,6 @@ func NewMemoryPlugin(
 func newMemoryPluginWithDeps(
 	tc tokenCounter,
 	ac apiTokenCounter,
-	layout MemoryLayout,
 	strategy CompressStrategy,
 	profile ModelProfile,
 	threshold float64,
@@ -196,12 +227,56 @@ func newMemoryPluginWithDeps(
 	return &MemoryPlugin{
 		tc:                 tc,
 		ac:                 ac,
-		layout:             layout,
 		strategy:           strategy,
 		profile:            profile,
 		threshold:          threshold,
 		emergencyThreshold: emergencyThreshold,
+		subSessions: []SubSession{{
+			Generation: 0,
+			StartTurn:  0,
+			EndTurn:    -1, // active
+			CreatedAt:  time.Now(),
+		}},
 	}, nil
+}
+
+// lastSummary returns the summary text from the most recent closed subsession.
+// Returns "" if no compression has occurred yet (only generation 0 exists).
+// Must be called under mu.
+func (p *MemoryPlugin) lastSummary() string {
+	for i := len(p.subSessions) - 1; i >= 0; i-- {
+		if p.subSessions[i].Summary != "" {
+			return p.subSessions[i].Summary
+		}
+	}
+	return ""
+}
+
+// activeGeneration returns the generation number of the current active subsession.
+// Must be called under mu.
+func (p *MemoryPlugin) activeGeneration() int {
+	if len(p.subSessions) == 0 {
+		return 0
+	}
+	return p.subSessions[len(p.subSessions)-1].Generation
+}
+
+// closeAndAdvance closes the current active subsession and opens a new one.
+// Must be called under mu.
+func (p *MemoryPlugin) closeAndAdvance(summary string, candidates int, tokensBefore, tokensAfter int) {
+	now := time.Now()
+	active := &p.subSessions[len(p.subSessions)-1]
+	active.EndTurn = active.StartTurn + candidates
+	active.Summary = summary
+	active.TokensBefore = tokensBefore
+	active.TokensAfter = tokensAfter
+
+	p.subSessions = append(p.subSessions, SubSession{
+		Generation: active.Generation + 1,
+		StartTurn:  active.EndTurn,
+		EndTurn:    -1, // new active
+		CreatedAt:  now,
+	})
 }
 
 // BuildPlugin creates and returns a plugin.Plugin configured with this
@@ -233,11 +308,14 @@ func (p *MemoryPlugin) GetSnapshot() MemoryMetrics {
 		snap.UsageRatio = float64(p.lastTotalTokens) / float64(contextTokens)
 	}
 
-	// Deep-copy the slice so callers cannot mutate internal state.
+	// Deep-copy slices so callers cannot mutate internal state.
 	if len(p.metrics.CompressReclaimedTokens) > 0 {
 		snap.CompressReclaimedTokens = make([]int, len(p.metrics.CompressReclaimedTokens))
 		copy(snap.CompressReclaimedTokens, p.metrics.CompressReclaimedTokens)
 	}
+
+	snap.SubSessions = make([]SubSession, len(p.subSessions))
+	copy(snap.SubSessions, p.subSessions)
 
 	return snap
 }
@@ -246,7 +324,9 @@ func (p *MemoryPlugin) GetSnapshot() MemoryMetrics {
 // AfterModelCallback
 // ---------------------------------------------------------------------------
 
-// afterModelCallback stores resp.UsageMetadata.TotalTokenCount as lastTotalTokens.
+// afterModelCallback stores resp.UsageMetadata.TotalTokenCount as lastTotalTokens
+// and injects compression metadata into resp.CustomMetadata when compression
+// occurred during this request's BeforeModelCallback.
 // Guard: only writes if the value is > 0 (preserves previous value on nil/zero metadata).
 func (p *MemoryPlugin) afterModelCallback(_ agent.CallbackContext, resp *model.LLMResponse, _ error) (*model.LLMResponse, error) {
 	if resp == nil || resp.UsageMetadata == nil {
@@ -263,7 +343,25 @@ func (p *MemoryPlugin) afterModelCallback(_ agent.CallbackContext, resp *model.L
 
 	p.mu.Lock()
 	p.lastTotalTokens = total
+	ci := p.lastCompressInfo
+	p.lastCompressInfo = nil // consume once
 	p.mu.Unlock()
+
+	// Inject compression metadata into the response so the Web UI trace
+	// (and any downstream consumer) can see that compression occurred.
+	if ci != nil {
+		if resp.CustomMetadata == nil {
+			resp.CustomMetadata = make(map[string]any)
+		}
+		resp.CustomMetadata["compression"] = map[string]any{
+			"strategy":          ci.Strategy,
+			"candidates":        ci.Candidates,
+			"original_tokens":   ci.OriginalTokens,
+			"compressed_tokens": ci.CompressedTokens,
+			"reclaimed_tokens":  ci.ReclaimedTokens,
+			"summary_index":     ci.SummaryIndex,
+		}
+	}
 
 	return nil, nil
 }
@@ -387,10 +485,7 @@ func (p *MemoryPlugin) triggerCompression(ctx context.Context, req *model.LLMReq
 
 	// Read existingSummary without holding mu during the compress call.
 	p.mu.Lock()
-	var existingSummary string
-	if len(p.summaries) > 0 {
-		existingSummary = p.summaries[len(p.summaries)-1]
-	}
+	existingSummary := p.lastSummary()
 	p.mu.Unlock()
 
 	candidates := p.strategy.SelectCandidates(activeTurns, targetReclaim)
@@ -399,7 +494,28 @@ func (p *MemoryPlugin) triggerCompression(ctx context.Context, req *model.LLMReq
 		return nil, nil
 	}
 
-	result, err := p.strategy.Compress(ctx, candidates, existingSummary, p.profile)
+	// Build the fork: snapshot the current subsession's view for compression.
+	// The fork sees the system instruction + subsession history (existing
+	// summary + candidate turns), like a forked process seeing its parent's
+	// memory image.
+	var forkHistory []*genai.Content
+	if existingSummary != "" {
+		// Prior generation's summary — the subsession's inherited memory.
+		forkHistory = append(forkHistory,
+			&genai.Content{Role: "user", Parts: []*genai.Part{{Text: "continue"}}},
+			&genai.Content{Role: "model", Parts: []*genai.Part{{Text: existingSummary}}},
+		)
+	}
+	// Candidate turns as original Content objects (not flattened text).
+	candidateContents := req.Contents[:len(candidates)]
+	forkHistory = append(forkHistory, candidateContents...)
+
+	fork := &ForkRequest{
+		SystemInstruction: extractSystemInstruction(req),
+		History:           forkHistory,
+	}
+
+	result, err := p.strategy.Compress(ctx, fork, p.profile)
 	if err != nil {
 		// Level 1: propagate — compression failure is non-fatal for the request
 		// but worth surfacing so the caller can decide.
@@ -412,18 +528,49 @@ func (p *MemoryPlugin) triggerCompression(ctx context.Context, req *model.LLMReq
 	// Update plugin state under mu.
 	reclaimedTokens := result.OriginalTokens - result.CompressedTokens
 	p.mu.Lock()
-	p.summaries = append(p.summaries, result.CompressedText)
-	p.compressedUpToIndex += len(candidates)
+	p.closeAndAdvance(result.CompressedText, len(candidates), result.OriginalTokens, result.CompressedTokens)
+	generation := p.activeGeneration()
 	p.metrics.CompressTriggerCount++
 	p.metrics.CompressReclaimedTokens = append(p.metrics.CompressReclaimedTokens, reclaimedTokens)
 	p.mu.Unlock()
 
+	// Truncate summary for log preview (max 200 chars).
+	summaryPreview := result.CompressedText
+	if len(summaryPreview) > 200 {
+		summaryPreview = summaryPreview[:200] + "..."
+	}
+
 	slog.Info("memory_plugin: compression triggered",
 		"strategy", p.strategy.Name(),
+		"generation", generation,
 		"candidates", len(candidates),
+		"original_tokens", result.OriginalTokens,
+		"compressed_tokens", result.CompressedTokens,
 		"reclaimed_tokens", reclaimedTokens,
-		"summary_index", len(p.summaries),
+		"compression_ratio", fmt.Sprintf("%.2f%%", result.ActualCompressionRatio*100),
+		"summary_preview", summaryPreview,
 	)
+
+	// Log subsession state after compression.
+	p.mu.Lock()
+	logSubSessions(p.subSessions)
+	p.mu.Unlock()
+
+	// Dump the rewritten req.Contents so operators can see exactly what the
+	// model will receive after compression.
+	logCompressedContents(req.Contents)
+
+	// Mark this request as compressed so afterModelCallback can inject metadata.
+	p.mu.Lock()
+	p.lastCompressInfo = &compressInfo{
+		Strategy:         p.strategy.Name(),
+		Candidates:       len(candidates),
+		OriginalTokens:   result.OriginalTokens,
+		CompressedTokens: result.CompressedTokens,
+		ReclaimedTokens:  reclaimedTokens,
+		SummaryIndex:     generation,
+	}
+	p.mu.Unlock()
 
 	return nil, nil
 }
@@ -442,10 +589,7 @@ func (p *MemoryPlugin) handleOOM(ctx context.Context, req *model.LLMRequest, pre
 
 	// --- Step 1: Check whether SUMMARY segment is non-empty ---
 	p.mu.Lock()
-	var existingSummary string
-	if len(p.summaries) > 0 {
-		existingSummary = p.summaries[len(p.summaries)-1]
-	}
+	existingSummary := p.lastSummary()
 	p.mu.Unlock()
 
 	if existingSummary == "" {
@@ -458,9 +602,15 @@ func (p *MemoryPlugin) handleOOM(ctx context.Context, req *model.LLMRequest, pre
 	}
 
 	// --- Step 2: Attempt secondary compression (summary of summary) ---
-	// Use the existing summary as the single candidate to re-compress.
-	summaryTurn := []ConversationTurn{{Role: "model", Content: existingSummary}}
-	secondaryResult, err := p.strategy.Compress(ctx, summaryTurn, "", p.profile)
+	// Fork the subsession with only the summary as history — re-compress it.
+	secondaryFork := &ForkRequest{
+		SystemInstruction: extractSystemInstruction(req),
+		History: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "continue"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: existingSummary}}},
+		},
+	}
+	secondaryResult, err := p.strategy.Compress(ctx, secondaryFork, p.profile)
 	if err != nil {
 		// Level 3 robustness: compress error → graceful degradation to OOMWarning.
 		// Do NOT propagate — this is a component fault, not a system error.
@@ -495,7 +645,7 @@ func (p *MemoryPlugin) handleOOM(ctx context.Context, req *model.LLMRequest, pre
 	// Update plugin state under mu.
 	reclaimedTokens := secondaryResult.OriginalTokens - secondaryResult.CompressedTokens
 	p.mu.Lock()
-	p.summaries = append(p.summaries, secondaryResult.CompressedText)
+	p.closeAndAdvance(secondaryResult.CompressedText, 1, secondaryResult.OriginalTokens, secondaryResult.CompressedTokens)
 	p.metrics.CompressTriggerCount++
 	p.metrics.CompressReclaimedTokens = append(p.metrics.CompressReclaimedTokens, reclaimedTokens)
 	p.mu.Unlock()
@@ -635,8 +785,14 @@ func buildCompressedContents(req *model.LLMRequest, summaryText string, compress
 		}
 	}
 
-	// Summary turn (model role, so it doesn't look like a user message).
+	// Compressed context: a user "continue" turn followed by the summary as a
+	// model turn. This ensures valid user→model turn alternation so the model
+	// treats the summary as its own prior output.
 	if summaryText != "" {
+		result = append(result, &genai.Content{
+			Role:  "user",
+			Parts: []*genai.Part{{Text: "continue"}},
+		})
 		result = append(result, &genai.Content{
 			Role:  "model",
 			Parts: []*genai.Part{{Text: summaryText}},
@@ -650,4 +806,81 @@ func buildCompressedContents(req *model.LLMRequest, summaryText string, compress
 	result = append(result, userMsg)
 
 	return result
+}
+
+// extractSystemInstruction returns the system instruction from the LLMRequest
+// config, or nil if not present.
+func extractSystemInstruction(req *model.LLMRequest) *genai.Content {
+	if req.Config != nil && req.Config.SystemInstruction != nil {
+		return req.Config.SystemInstruction
+	}
+	return nil
+}
+
+// compressInfo holds compression metadata from one triggerCompression cycle.
+// It is written by triggerCompression and consumed (once) by afterModelCallback
+// to inject metadata into the model response.
+type compressInfo struct {
+	Strategy         string
+	Candidates       int
+	OriginalTokens   int
+	CompressedTokens int
+	ReclaimedTokens  int
+	SummaryIndex     int
+}
+
+// logSubSessions dumps the subsession history so operators can see the
+// generation boundaries and which subsessions are closed vs active.
+func logSubSessions(sessions []SubSession) {
+	for _, ss := range sessions {
+		status := "active"
+		if ss.EndTurn >= 0 {
+			status = "closed"
+		}
+		summaryPreview := ss.Summary
+		if len(summaryPreview) > 100 {
+			summaryPreview = summaryPreview[:100] + "..."
+		}
+		slog.Info("memory_plugin: subsession",
+			"generation", ss.Generation,
+			"status", status,
+			"start_turn", ss.StartTurn,
+			"end_turn", ss.EndTurn,
+			"tokens_before", ss.TokensBefore,
+			"tokens_after", ss.TokensAfter,
+			"summary_preview", summaryPreview,
+		)
+	}
+}
+
+// logCompressedContents dumps the rewritten req.Contents structure to slog so
+// operators can see exactly what the model receives after compression.
+func logCompressedContents(contents []*genai.Content) {
+	for i, c := range contents {
+		role := c.Role
+		if role == "" {
+			role = "system"
+		}
+
+		// Collect text from all parts.
+		var text string
+		for _, p := range c.Parts {
+			if p.Text != "" {
+				text += p.Text
+			}
+		}
+
+		// Truncate long content for readability.
+		preview := text
+		if len(preview) > 300 {
+			preview = preview[:300] + "..."
+		}
+
+		slog.Info("memory_plugin: compressed request contents",
+			"index", i,
+			"role", role,
+			"chars", len(text),
+			"preview", preview,
+		)
+	}
 }

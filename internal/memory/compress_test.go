@@ -3,11 +3,10 @@ package memory
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
-	dp "github.com/google/dotprompt/go/dotprompt"
+	"google.golang.org/genai"
 )
 
 // ---- Task 1 & 2: Interface and type definition tests ----
@@ -61,7 +60,7 @@ func TestConversationTurn_HasAllFields(t *testing.T) {
 	turn := ConversationTurn{
 		Role:       "user",
 		Content:    "hello world",
-		TokenCount: 3,
+		TokenCount: 2,
 	}
 
 	// Assert
@@ -71,271 +70,253 @@ func TestConversationTurn_HasAllFields(t *testing.T) {
 	if turn.Content != "hello world" {
 		t.Errorf("Content mismatch")
 	}
-	if turn.TokenCount != 3 {
+	if turn.TokenCount != 2 {
 		t.Errorf("TokenCount mismatch")
 	}
 }
 
-// ---- Task 4: SelectCandidates boundary tests ----
+// ---- Task 3: SelectCandidates tests ----
 
 func makeNTurns(n int) []ConversationTurn {
 	turns := make([]ConversationTurn, n)
 	for i := range turns {
-		turns[i] = ConversationTurn{Role: "user", Content: "msg", TokenCount: 10}
+		role := "user"
+		if i%2 == 1 {
+			role = "model"
+		}
+		turns[i] = ConversationTurn{Role: role, Content: "msg", TokenCount: 10}
 	}
 	return turns
 }
 
-// TestGenerational_SelectCandidates_should_return_oldest_N_when_more_than_N_available
-func TestGenerational_SelectCandidates_should_return_oldest_N_when_more_than_N_available(t *testing.T) {
-	// Arrange
-	g := &Generational{cfg: GenerationalConfig{OldestN: 5}}
-	turns := makeNTurns(8)
-	// Mark turns with distinct content to identify them
-	for i := range turns {
-		turns[i].Content = strings.Repeat("x", i+1)
-	}
+func TestGenerational_SelectCandidates_should_compress_all_except_recent_M(t *testing.T) {
+	// TurnsToKeep=3, 10 turns → compress oldest 7, keep recent 3
+	g := &Generational{cfg: GenerationalConfig{TurnsToKeep: 3}}
+	turns := makeNTurns(10)
 
-	// Act
 	candidates := g.SelectCandidates(turns, 1000)
 
-	// Assert
-	if len(candidates) != 5 {
-		t.Fatalf("expected 5 candidates, got %d", len(candidates))
+	if len(candidates) != 7 {
+		t.Fatalf("expected 7 candidates (10 - 3 kept), got %d", len(candidates))
 	}
-	// Oldest N = first 5 (index 0..4)
-	for i, c := range candidates {
-		if c.Content != turns[i].Content {
-			t.Errorf("candidate[%d] should be turn[%d]", i, i)
-		}
+	if candidates[0].Content != turns[0].Content {
+		t.Errorf("expected first candidate to be the oldest turn")
 	}
 }
 
-// TestGenerational_SelectCandidates_should_return_all_when_fewer_than_N_available
-func TestGenerational_SelectCandidates_should_return_all_when_fewer_than_N_available(t *testing.T) {
-	// Arrange
-	g := &Generational{cfg: GenerationalConfig{OldestN: 5}}
-	turns := makeNTurns(3)
+func TestGenerational_SelectCandidates_should_return_empty_when_all_fit_in_keep(t *testing.T) {
+	// TurnsToKeep=5, only 2 turns → nothing to compress
+	g := &Generational{cfg: GenerationalConfig{TurnsToKeep: 5}}
+	turns := makeNTurns(2)
 
-	// Act
 	candidates := g.SelectCandidates(turns, 1000)
 
-	// Assert
-	if len(candidates) != 3 {
-		t.Fatalf("expected 3 candidates (all available), got %d", len(candidates))
+	if len(candidates) != 0 {
+		t.Fatalf("expected 0 candidates (all fit in keep window), got %d", len(candidates))
 	}
 }
 
-// TestGenerational_SelectCandidates_should_return_empty_when_activeTurns_is_empty
 func TestGenerational_SelectCandidates_should_return_empty_when_activeTurns_is_empty(t *testing.T) {
-	// Arrange
-	g := &Generational{cfg: GenerationalConfig{OldestN: 5}}
+	g := &Generational{cfg: GenerationalConfig{TurnsToKeep: 5}}
 
-	// Act
 	candidates := g.SelectCandidates([]ConversationTurn{}, 1000)
 
-	// Assert
 	if len(candidates) != 0 {
 		t.Fatalf("expected empty slice, got %d elements", len(candidates))
 	}
 }
 
-// TestGenerational_SelectCandidates_should_return_exactly_N_when_exactly_N_available
-func TestGenerational_SelectCandidates_should_return_exactly_N_when_exactly_N_available(t *testing.T) {
-	// Arrange
-	g := &Generational{cfg: GenerationalConfig{OldestN: 5}}
+func TestGenerational_SelectCandidates_should_return_empty_when_turns_equal_keep(t *testing.T) {
+	// TurnsToKeep=5, exactly 5 turns → nothing to compress
+	g := &Generational{cfg: GenerationalConfig{TurnsToKeep: 5}}
 	turns := makeNTurns(5)
 
-	// Act
 	candidates := g.SelectCandidates(turns, 1000)
 
-	// Assert
-	if len(candidates) != 5 {
-		t.Fatalf("expected exactly 5 candidates, got %d", len(candidates))
+	if len(candidates) != 0 {
+		t.Fatalf("expected 0 candidates (turns == keep window), got %d", len(candidates))
 	}
 }
 
-// ---- dotprompt buildPrompt tests ----
+// ---- Fork-based Compress tests ----
 
-// inlineSummarizeSource is a minimal Handlebars template matching the
-// summarize.prompt behavior, used to avoid filesystem access in tests.
-const inlineSummarizeSource = `---
-model: googleai/gemini-2.0-flash-lite
-input:
-  schema:
-    existingSummary?: string
-    turns: string
----
-{{#if existingSummary}}
-Prior summary:
-{{existingSummary}}
-
-{{/if}}
-Summarize the following conversation turns, preserving key information:
-{{turns}}`
-
-// compileInlineStore compiles the inline source and wraps it as a PromptStore
-// so tests never touch the filesystem.
-func compileInlineStore(t *testing.T) dp.PromptStore {
-	t.Helper()
-	return &inlinePromptStore{source: inlineSummarizeSource}
-}
-
-// inlinePromptStore implements dp.PromptStore backed by an in-memory source.
-type inlinePromptStore struct {
-	source string
-}
-
-func (s *inlinePromptStore) List(_ dp.ListPromptsOptions) (dp.ListPromptsResult[dp.PromptRef], error) {
-	return dp.ListPromptsResult[dp.PromptRef]{}, nil
-}
-
-func (s *inlinePromptStore) ListPartials(_ dp.ListPartialsOptions) (dp.ListPartialsResult[dp.PartialRef], error) {
-	return dp.ListPartialsResult[dp.PartialRef]{}, nil
-}
-
-func (s *inlinePromptStore) Load(name string, _ dp.LoadPromptOptions) (dp.PromptData, error) {
-	if name == "summarize" {
-		return dp.PromptData{
-			PromptRef: dp.PromptRef{Name: name},
-			Source:    s.source,
-		}, nil
+func makeForkRequest(nTurns int) *ForkRequest {
+	history := make([]*genai.Content, nTurns)
+	for i := range history {
+		role := "user"
+		if i%2 == 1 {
+			role = "model"
+		}
+		history[i] = &genai.Content{
+			Role:  role,
+			Parts: []*genai.Part{{Text: "msg"}},
+		}
 	}
-	return dp.PromptData{}, fmt.Errorf("prompt not found: %s", name)
-}
-
-func (s *inlinePromptStore) LoadPartial(name string, _ dp.LoadPartialOptions) (dp.PartialData, error) {
-	return dp.PartialData{}, fmt.Errorf("partial not found: %s", name)
-}
-
-// TestGenerational_buildPrompt_should_render_turns_when_existingSummary_absent
-func TestGenerational_buildPrompt_should_render_turns_when_existingSummary_absent(t *testing.T) {
-	// Arrange
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: compileInlineStore(t),
+	return &ForkRequest{
+		SystemInstruction: &genai.Content{
+			Role:  "system",
+			Parts: []*genai.Part{{Text: "You are a helpful assistant."}},
 		},
-	}
-	turns := []ConversationTurn{
-		{Role: "user", Content: "hello", TokenCount: 1},
-		{Role: "model", Content: "hi there", TokenCount: 2},
-	}
-
-	// Act
-	prompt, err := g.buildPrompt("", turns)
-
-	// Assert
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if prompt == "" {
-		t.Fatal("expected non-empty prompt")
-	}
-	if strings.Contains(prompt, "Prior summary:") {
-		t.Errorf("expected no prior-summary block when existingSummary is empty, got: %s", prompt)
-	}
-	if !strings.Contains(prompt, "hello") {
-		t.Errorf("expected turns content in prompt, got: %s", prompt)
+		History: history,
 	}
 }
 
-// TestGenerational_buildPrompt_should_include_existingSummary_in_rendered_output
-func TestGenerational_buildPrompt_should_include_existingSummary_in_rendered_output(t *testing.T) {
-	// Arrange
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: compileInlineStore(t),
-		},
-	}
-	turns := []ConversationTurn{
-		{Role: "user", Content: "new question", TokenCount: 2},
-	}
-	existingSummary := "prior context: topic A was discussed"
+func TestGenerational_buildForkContents_should_include_system_and_instruction(t *testing.T) {
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 3}, nil, ModelProfile{})
+	fork := makeForkRequest(2)
 
-	// Act
-	prompt, err := g.buildPrompt(existingSummary, turns)
+	contents := g.buildForkContents(fork)
 
-	// Assert
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+	// Should be: system + 2 history turns + summarize instruction = 4
+	if len(contents) != 4 {
+		t.Fatalf("expected 4 contents, got %d", len(contents))
 	}
-	if !strings.Contains(prompt, existingSummary) {
-		t.Errorf("expected existingSummary in prompt, got: %s", prompt)
+	// First should be system
+	if contents[0].Parts[0].Text != "You are a helpful assistant." {
+		t.Errorf("expected system instruction first")
 	}
-	if !strings.Contains(prompt, "Prior summary:") {
-		t.Errorf("expected prior-summary heading in prompt, got: %s", prompt)
+	// Last should be summarize instruction
+	last := contents[len(contents)-1]
+	if last.Role != "user" {
+		t.Errorf("expected last content to be user role, got %q", last.Role)
+	}
+	if !strings.Contains(last.Parts[0].Text, "handover") {
+		t.Errorf("expected handover instruction, got %q", last.Parts[0].Text)
 	}
 }
 
-// TestGenerational_buildPrompt_should_return_error_when_turns_is_empty verifies
-// that buildPrompt returns an explicit error when the turns slice is nil or empty,
-// since dotprompt does not enforce required schema fields at render time and would
-// silently produce an empty prompt.
-func TestGenerational_buildPrompt_should_return_error_when_turns_is_empty(t *testing.T) {
-	cases := []struct {
-		name  string
-		turns []ConversationTurn
-	}{
-		{"nil turns", nil},
-		{"empty turns slice", []ConversationTurn{}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Arrange
-			g := &Generational{
-				cfg: GenerationalConfig{
-					OldestN:     3,
-					PromptStore: compileInlineStore(t),
-				},
-			}
-
-			// Act
-			prompt, err := g.buildPrompt("", tc.turns)
-
-			// Assert
-			if err == nil {
-				t.Fatalf("expected error for empty turns, got nil (prompt=%q)", prompt)
-			}
-			if prompt != "" {
-				t.Errorf("expected empty prompt string on error, got %q", prompt)
-			}
-		})
-	}
-}
-
-// TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store
-func TestGenerational_buildPrompt_should_return_error_when_prompt_not_in_store(t *testing.T) {
-	// Arrange — store that always returns an error (simulates missing .prompt file)
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: &failingPromptStore{},
+func TestGenerational_buildForkContents_should_work_without_system_instruction(t *testing.T) {
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 3}, nil, ModelProfile{})
+	fork := &ForkRequest{
+		History: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "hello"}}},
 		},
 	}
 
-	// Act
-	_, err := g.buildPrompt("", makeNTurns(1))
+	contents := g.buildForkContents(fork)
 
-	// Assert
+	// Should be: 1 history turn + summarize instruction = 2
+	if len(contents) != 2 {
+		t.Fatalf("expected 2 contents, got %d", len(contents))
+	}
+}
+
+func TestGenerational_Compress_should_return_error_when_worker_is_nil(t *testing.T) {
+	g := &Generational{
+		cfg:    GenerationalConfig{TurnsToKeep: 5, SummarizeInstruction: defaultSummarizeInstruction},
+		worker: nil,
+	}
+	profile := ModelProfile{ModelID: "gemini-2.0-flash", ContextWindowTokens: 1048576}
+
+	result, err := g.Compress(context.Background(), makeForkRequest(2), profile)
+
 	if err == nil {
-		t.Fatal("expected error when prompt not found in store, got nil")
+		t.Fatal("expected error when worker is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "worker is nil") {
+		t.Errorf("expected 'worker is nil' in error, got: %s", err.Error())
+	}
+	if result != nil {
+		t.Errorf("expected nil result")
+	}
+}
+
+func TestGenerational_Compress_should_return_error_when_fork_has_no_history(t *testing.T) {
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 5}, &mockRecordingWorker{}, ModelProfile{})
+	profile := ModelProfile{ModelID: "gemini-2.0-flash", ContextWindowTokens: 1048576}
+
+	result, err := g.Compress(context.Background(), &ForkRequest{}, profile)
+
+	if err == nil {
+		t.Fatal("expected error for empty fork history, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result")
+	}
+}
+
+func TestGenerational_Compress_should_return_nil_result_and_error_when_worker_fails(t *testing.T) {
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 3}, &mockFailingWorker{}, ModelProfile{})
+	profile := ModelProfile{ModelID: "gemini-2.0-flash", ContextWindowTokens: 1048576}
+
+	result, err := g.Compress(context.Background(), makeForkRequest(3), profile)
+
+	if err == nil {
+		t.Fatal("expected error when worker fails, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result when worker fails")
+	}
+}
+
+func TestGenerational_Compress_should_use_CompressModelID_when_set(t *testing.T) {
+	recorder := &mockRecordingWorker{}
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 3}, recorder, ModelProfile{})
+	profile := ModelProfile{
+		ModelID:             "gemini-2.0-flash",
+		CompressModelID:     "gemini-2.0-flash-lite",
+		ContextWindowTokens: 1048576,
+	}
+
+	_, _ = g.Compress(context.Background(), makeForkRequest(2), profile)
+
+	if recorder.calledWithModel != "gemini-2.0-flash-lite" {
+		t.Errorf("expected CompressModelID 'gemini-2.0-flash-lite', worker got %q", recorder.calledWithModel)
+	}
+}
+
+func TestGenerational_Compress_should_use_primary_model_when_CompressModelID_empty(t *testing.T) {
+	recorder := &mockRecordingWorker{}
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 3}, recorder, ModelProfile{})
+	profile := ModelProfile{
+		ModelID:             "gemini-2.0-flash",
+		CompressModelID:     "",
+		ContextWindowTokens: 1048576,
+	}
+
+	_, _ = g.Compress(context.Background(), makeForkRequest(2), profile)
+
+	if recorder.calledWithModel != "gemini-2.0-flash" {
+		t.Errorf("expected fallback to 'gemini-2.0-flash', worker got %q", recorder.calledWithModel)
+	}
+}
+
+func TestGenerational_Compress_should_pass_structured_contents_to_worker(t *testing.T) {
+	recorder := &mockRecordingWorker{}
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 3}, recorder, ModelProfile{})
+	profile := ModelProfile{ModelID: "gemini-2.0-flash", ContextWindowTokens: 1048576}
+
+	_, _ = g.Compress(context.Background(), makeForkRequest(2), profile)
+
+	// Worker should receive: system + 2 history + summarize instruction = 4 contents
+	if len(recorder.calledWithContents) != 4 {
+		t.Errorf("expected 4 contents passed to worker, got %d", len(recorder.calledWithContents))
+	}
+}
+
+func TestCompressResult_should_calculate_ratio_from_usage_metadata(t *testing.T) {
+	worker := &mockRatioWorker{promptTokenCount: 100, candidatesTokenCount: 40}
+	g := NewGenerational(GenerationalConfig{TurnsToKeep: 5}, worker, ModelProfile{})
+	profile := ModelProfile{ModelID: "gemini-2.0-flash", ContextWindowTokens: 1048576}
+
+	result, err := g.Compress(context.Background(), makeForkRequest(4), profile)
+
+	if err != nil {
+		t.Fatalf("Compress() unexpected error: %v", err)
+	}
+	wantRatio := float64(40) / float64(100)
+	if result.ActualCompressionRatio != wantRatio {
+		t.Errorf("ActualCompressionRatio = %f, want %f", result.ActualCompressionRatio, wantRatio)
 	}
 }
 
 // ---- Task 9: Strategy registry tests ----
 
-// TestStrategyRegistry_should_return_error_listing_available_names_when_unknown
 func TestStrategyRegistry_should_return_error_listing_available_names_when_unknown(t *testing.T) {
-	// Arrange
 	reg := NewStrategyRegistry()
 
-	// Act
 	_, err := reg.Resolve("foo")
 
-	// Assert
 	if err == nil {
 		t.Fatal("expected error for unknown strategy, got nil")
 	}
@@ -347,15 +328,11 @@ func TestStrategyRegistry_should_return_error_listing_available_names_when_unkno
 	}
 }
 
-// TestStrategyRegistry_should_resolve_generational_by_name
 func TestStrategyRegistry_should_resolve_generational_by_name(t *testing.T) {
-	// Arrange
 	reg := NewStrategyRegistry()
 
-	// Act
 	s, err := reg.Resolve("generational")
 
-	// Assert
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -364,232 +341,24 @@ func TestStrategyRegistry_should_resolve_generational_by_name(t *testing.T) {
 	}
 }
 
-// ---- Task 12: CompressResult ratio + fallback model warning tests ----
-
-// TestCompressResult_should_calculate_ratio_correctly verifies that
-// Generational.Compress populates ActualCompressionRatio correctly as
-// CandidatesTokenCount / originalTokens using values from a real Compress call.
-func TestCompressResult_should_calculate_ratio_correctly(t *testing.T) {
-	// Arrange
-	// mockRatioWorker returns a fixed CandidatesTokenCount so we can verify
-	// the ratio calculation without any arithmetic in the test itself.
-	worker := &mockRatioWorker{candidatesTokenCount: 40}
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     5,
-			PromptStore: compileInlineStore(t),
-		},
-		worker: worker,
-	}
-	// Build 4 turns of 25 tokens each → originalTokens = 100
-	turns := make([]ConversationTurn, 4)
-	for i := range turns {
-		turns[i] = ConversationTurn{Role: "user", Content: "msg", TokenCount: 25}
-	}
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		ContextWindowTokens: 1048576,
-	}
-
-	// Act
-	result, err := g.Compress(context.Background(), turns, "", profile)
-
-	// Assert
-	if err != nil {
-		t.Fatalf("Compress() unexpected error: %v", err)
-	}
-	wantRatio := float64(40) / float64(100) // candidatesTokenCount / originalTokens
-	if result.ActualCompressionRatio != wantRatio {
-		t.Errorf("ActualCompressionRatio = %f, want %f", result.ActualCompressionRatio, wantRatio)
-	}
-}
-
-// TestGenerational_Compress_should_return_error_when_worker_is_nil verifies that
-// calling Compress with a nil worker returns a descriptive error instead of panicking.
-func TestGenerational_Compress_should_return_error_when_worker_is_nil(t *testing.T) {
-	// Arrange
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     5,
-			PromptStore: compileInlineStore(t),
-		},
-		worker: nil, // intentionally nil
-	}
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		ContextWindowTokens: 1048576,
-	}
-
-	// Act
-	result, err := g.Compress(context.Background(), makeNTurns(2), "", profile)
-
-	// Assert
-	if err == nil {
-		t.Fatal("expected error when worker is nil, got nil")
-	}
-	if !strings.Contains(err.Error(), "worker is nil") {
-		t.Errorf("expected error to contain 'worker is nil', got: %s", err.Error())
-	}
-	if result != nil {
-		t.Errorf("expected nil result when worker is nil, got non-nil")
-	}
-}
-
-// TestGenerational_Compress_should_return_nil_result_and_error_when_worker_fails
-func TestGenerational_Compress_should_return_nil_result_and_error_when_worker_fails(t *testing.T) {
-	// Arrange — use mock worker that always fails
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: compileInlineStore(t),
-		},
-		worker: &mockFailingWorker{},
-	}
-	turns := makeNTurns(3)
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		ContextWindowTokens: 1048576,
-	}
-
-	// Act
-	result, err := g.Compress(context.Background(), turns, "", profile)
-
-	// Assert
-	if err == nil {
-		t.Fatal("expected error when worker fails, got nil")
-	}
-	if result != nil {
-		t.Errorf("expected nil result when worker fails, got non-nil")
-	}
-}
-
-// TestGenerational_Compress_should_return_error_when_buildPrompt_fails
-func TestGenerational_Compress_should_return_error_when_buildPrompt_fails(t *testing.T) {
-	// Arrange — store that always fails Load
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: &failingPromptStore{},
-		},
-		worker: &mockRecordingWorker{},
-	}
-	turns := makeNTurns(2)
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		ContextWindowTokens: 1048576,
-	}
-
-	// Act
-	result, err := g.Compress(context.Background(), turns, "", profile)
-
-	// Assert
-	if err == nil {
-		t.Fatal("expected error when buildPrompt fails, got nil")
-	}
-	if result != nil {
-		t.Errorf("expected nil result when buildPrompt fails, got non-nil")
-	}
-}
-
-// TestGenerational_Compress_should_use_CompressModelID_when_set
-func TestGenerational_Compress_should_use_CompressModelID_when_set(t *testing.T) {
-	// Arrange
-	recorder := &mockRecordingWorker{}
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: compileInlineStore(t),
-		},
-		worker: recorder,
-	}
-	turns := makeNTurns(2)
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		CompressModelID:     "gemini-2.0-flash-lite",
-		ContextWindowTokens: 1048576,
-	}
-
-	// Act
-	_, _ = g.Compress(context.Background(), turns, "", profile)
-
-	// Assert
-	if recorder.calledWithModel != "gemini-2.0-flash-lite" {
-		t.Errorf("expected CompressModelID 'gemini-2.0-flash-lite', worker got %q", recorder.calledWithModel)
-	}
-}
-
-// TestGenerational_Compress_should_use_primary_model_when_CompressModelID_empty
-func TestGenerational_Compress_should_use_primary_model_when_CompressModelID_empty(t *testing.T) {
-	// Arrange
-	recorder := &mockRecordingWorker{}
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: compileInlineStore(t),
-		},
-		worker: recorder,
-	}
-	turns := makeNTurns(2)
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		CompressModelID:     "", // empty → fall back
-		ContextWindowTokens: 1048576,
-	}
-
-	// Act
-	_, _ = g.Compress(context.Background(), turns, "", profile)
-
-	// Assert
-	if recorder.calledWithModel != "gemini-2.0-flash" {
-		t.Errorf("expected fallback to primary model 'gemini-2.0-flash', worker got %q", recorder.calledWithModel)
-	}
-}
-
-// TestGenerational_Compress_should_include_existingSummary_in_prompt
-func TestGenerational_Compress_should_include_existingSummary_in_prompt(t *testing.T) {
-	// Arrange
-	recorder := &mockRecordingWorker{}
-	g := &Generational{
-		cfg: GenerationalConfig{
-			OldestN:     3,
-			PromptStore: compileInlineStore(t),
-		},
-		worker: recorder,
-	}
-	turns := makeNTurns(2)
-	profile := ModelProfile{
-		ModelID:             "gemini-2.0-flash",
-		ContextWindowTokens: 1048576,
-	}
-	existingSummary := "prior context: user discussed topic A"
-
-	// Act
-	_, _ = g.Compress(context.Background(), turns, existingSummary, profile)
-
-	// Assert
-	if !strings.Contains(recorder.calledWithPrompt, existingSummary) {
-		t.Errorf("expected prompt to include existingSummary %q, got: %s", existingSummary, recorder.calledWithPrompt)
-	}
-}
-
 // ---- Mock helpers ----
 
 // mockFailingWorker always returns an error from Summarize.
 type mockFailingWorker struct{}
 
-func (m *mockFailingWorker) Summarize(_ context.Context, _, _ string) (string, *WorkerUsageMetadata, error) {
+func (m *mockFailingWorker) Summarize(_ context.Context, _ string, _ []*genai.Content) (string, *WorkerUsageMetadata, error) {
 	return "", nil, errors.New("simulated LLM failure")
 }
 
 // mockRecordingWorker records what it was called with and returns a canned result.
 type mockRecordingWorker struct {
-	calledWithModel  string
-	calledWithPrompt string
+	calledWithModel    string
+	calledWithContents []*genai.Content
 }
 
-func (m *mockRecordingWorker) Summarize(_ context.Context, model, prompt string) (string, *WorkerUsageMetadata, error) {
+func (m *mockRecordingWorker) Summarize(_ context.Context, model string, contents []*genai.Content) (string, *WorkerUsageMetadata, error) {
 	m.calledWithModel = model
-	m.calledWithPrompt = prompt
+	m.calledWithContents = contents
 	return "compressed summary", &WorkerUsageMetadata{
 		PromptTokenCount:     50,
 		CandidatesTokenCount: 10,
@@ -597,33 +366,16 @@ func (m *mockRecordingWorker) Summarize(_ context.Context, model, prompt string)
 	}, nil
 }
 
-// mockRatioWorker returns a fixed CandidatesTokenCount for ratio verification.
+// mockRatioWorker returns fixed token counts for ratio verification.
 type mockRatioWorker struct {
+	promptTokenCount     int32
 	candidatesTokenCount int32
 }
 
-func (m *mockRatioWorker) Summarize(_ context.Context, _, _ string) (string, *WorkerUsageMetadata, error) {
+func (m *mockRatioWorker) Summarize(_ context.Context, _ string, _ []*genai.Content) (string, *WorkerUsageMetadata, error) {
 	return "summary", &WorkerUsageMetadata{
+		PromptTokenCount:     m.promptTokenCount,
 		CandidatesTokenCount: m.candidatesTokenCount,
-		TotalTokenCount:      m.candidatesTokenCount,
+		TotalTokenCount:      m.promptTokenCount + m.candidatesTokenCount,
 	}, nil
-}
-
-// failingPromptStore always returns an error from Load.
-type failingPromptStore struct{}
-
-func (s *failingPromptStore) List(_ dp.ListPromptsOptions) (dp.ListPromptsResult[dp.PromptRef], error) {
-	return dp.ListPromptsResult[dp.PromptRef]{}, nil
-}
-
-func (s *failingPromptStore) ListPartials(_ dp.ListPartialsOptions) (dp.ListPartialsResult[dp.PartialRef], error) {
-	return dp.ListPartialsResult[dp.PartialRef]{}, nil
-}
-
-func (s *failingPromptStore) Load(name string, _ dp.LoadPromptOptions) (dp.PromptData, error) {
-	return dp.PromptData{}, errors.New("simulated store failure")
-}
-
-func (s *failingPromptStore) LoadPartial(name string, _ dp.LoadPartialOptions) (dp.PartialData, error) {
-	return dp.PartialData{}, errors.New("simulated store failure")
 }

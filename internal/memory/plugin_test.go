@@ -75,7 +75,7 @@ func (s *stubCompressStrategy) SelectCandidates(activeTurns []ConversationTurn, 
 	return activeTurns
 }
 
-func (s *stubCompressStrategy) Compress(_ context.Context, _ []ConversationTurn, _ string, _ ModelProfile) (*CompressResult, error) {
+func (s *stubCompressStrategy) Compress(_ context.Context, _ *ForkRequest, _ ModelProfile) (*CompressResult, error) {
 	s.selectMu.Lock()
 	s.compressCalls++
 	s.selectMu.Unlock()
@@ -99,22 +99,12 @@ func newTestPlugin(t *testing.T, tc tokenCounter, ac apiTokenCounter, strategy C
 		ContextWindowTokens: 1_000_000,
 		MaxOutputTokens:     8_192,
 	}
-	cfg := LayoutConfig{
-		PinnedRatio:  0.10,
-		SummaryRatio: 0.15,
-		ActiveRatio:  0.65,
-		BufferRatio:  0.10,
-	}
-	layout, err := NewLayout(profile, cfg)
-	if err != nil {
-		t.Fatalf("newTestPlugin: NewLayout: %v", err)
-	}
 	if strategy == nil {
 		strategy = &stubCompressStrategy{
 			result: &CompressResult{CompressedText: "summary", OriginalTokens: 100, CompressedTokens: 20},
 		}
 	}
-	p, err := newMemoryPluginWithDeps(tc, ac, layout, strategy, profile, threshold, 0)
+	p, err := newMemoryPluginWithDeps(tc, ac, strategy, profile, threshold, 0)
 	if err != nil {
 		t.Fatalf("newTestPlugin: newMemoryPluginWithDeps: %v", err)
 	}
@@ -181,8 +171,6 @@ func TestNewMemoryPlugin_RejectsThresholdOutOfRange(t *testing.T) {
 		ContextWindowTokens: 1_000_000,
 		MaxOutputTokens:     8_192,
 	}
-	cfg := LayoutConfig{PinnedRatio: 0.10, SummaryRatio: 0.15, ActiveRatio: 0.65, BufferRatio: 0.10}
-	layout, _ := NewLayout(profile, cfg)
 	strategy := &stubCompressStrategy{}
 
 	tests := []struct {
@@ -198,7 +186,7 @@ func TestNewMemoryPlugin_RejectsThresholdOutOfRange(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Act
-			_, err := newMemoryPluginWithDeps(&stubTokenCounter{}, &stubAPICounter{}, layout, strategy, profile, tt.threshold, 0)
+			_, err := newMemoryPluginWithDeps(&stubTokenCounter{}, &stubAPICounter{}, strategy, profile, tt.threshold, 0)
 
 			// Assert
 			if err == nil {
@@ -489,12 +477,12 @@ func TestBeforeModelCallback_TriggersCompression_WhenPreciseTotalAboveThreshold(
 		t.Errorf("expected CompressTriggerCount=1, got %d", snap.CompressTriggerCount)
 	}
 
-	// summaries must have a new entry
+	// subSessions must have advanced: generation 0 (closed) + generation 1 (active)
 	p.mu.Lock()
-	summaryCount := len(p.summaries)
+	ssCount := len(p.subSessions)
 	p.mu.Unlock()
-	if summaryCount != 1 {
-		t.Errorf("expected 1 summary entry, got %d", summaryCount)
+	if ssCount != 2 {
+		t.Errorf("expected 2 subsessions (gen 0 closed + gen 1 active), got %d", ssCount)
 	}
 
 	// strategy must have been called

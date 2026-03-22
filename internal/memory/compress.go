@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	dp "github.com/google/dotprompt/go/dotprompt"
 	"google.golang.org/genai"
 )
 
@@ -37,6 +36,23 @@ type CompressResult struct {
 	WorkerUsage            WorkerUsageMetadata
 }
 
+// ForkRequest represents a forked conversation snapshot for compression.
+// Like a process fork, it captures the current subsession's memory image
+// (system prompt + conversation history) and appends a summarization instruction.
+//
+// For generation 0→1: the fork contains the original conversation turns.
+// For generation N→N+1: the fork contains the subsession view (prior summary +
+// recent turns since last compression), NOT the full session history.
+type ForkRequest struct {
+	// SystemInstruction is the agent's system prompt (from the parent process).
+	SystemInstruction *genai.Content
+
+	// History is the conversation turns to summarize. For the first fork this
+	// is the original turns; for subsequent forks this is the subsession view
+	// (summary + recent active turns).
+	History []*genai.Content
+}
+
 // CompressStrategy is the pluggable compression policy interface.
 // Implementations must be stateless — no mutable state may be held between calls.
 // All I/O is injected via parameters; implementations must not open network
@@ -49,42 +65,92 @@ type CompressStrategy interface {
 	// It must never panic on empty or short slices.
 	SelectCandidates(activeTurns []ConversationTurn, targetReclaimTokens int) []ConversationTurn
 
-	// Compress compresses candidates using an isolated worker.
-	// existingSummary from a prior cycle must be woven into the prompt so context
-	// is not lost across multiple compression cycles.
+	// Compress forks the current subsession and asks the compress worker to
+	// summarize it. The ForkRequest carries the system instruction and the
+	// conversation history of the subsession being compressed.
 	// Returns (nil, error) on any worker failure — never a partial result.
-	Compress(ctx context.Context, candidates []ConversationTurn, existingSummary string, profile ModelProfile) (*CompressResult, error)
+	Compress(ctx context.Context, fork *ForkRequest, profile ModelProfile) (*CompressResult, error)
 }
 
 // ---- Generational strategy ----
 
 // GenerationalConfig holds configuration for the Generational strategy.
 type GenerationalConfig struct {
-	// OldestN is the number of oldest turns to select per compression cycle.
-	// Defaults to 5.
-	OldestN int
+	// TurnsToKeep is the number of most recent turns to preserve uncompressed.
+	// All older turns are selected as compression candidates.
+	// When zero, it is computed as ContextWindowTokens / MaxOutputTokens from
+	// the ModelProfile, giving larger context windows more preserved turns.
+	TurnsToKeep int
 
-	// PromptStore is a dotprompt source loader used to load and render the
-	// summarize prompt. In production, pass a *dp.DirStore pointing at the
-	// prompts/ directory. In tests, pass an in-memory implementation so no
-	// filesystem access is needed.
-	PromptStore dp.PromptStore
+	// SummarizeInstruction is the user-facing instruction appended to the forked
+	// conversation to request a summary. Defaults to defaultSummarizeInstruction.
+	SummarizeInstruction string
 }
 
-// defaultGenerationalConfig returns a GenerationalConfig with safe defaults.
-// The PromptStore is nil — callers must inject a real store before use, or
-// use NewGenerational which wires up the production DirStore.
-func defaultGenerationalConfig() GenerationalConfig {
-	return GenerationalConfig{
-		OldestN: 5,
-	}
-}
+// defaultSummarizeInstruction is the handover instruction appended as a user
+// message to the forked conversation. It frames compression as a shift handover:
+// the current subsession is ending, and the summary must equip the next
+// subsession to continue seamlessly.
+//
+// Design rationale (Prompt Architect four-pillar framework):
+//   - Persona: senior project manager performing shift handover
+//   - Task: produce a structured Context Handover Document
+//   - Context: the next AI instance has zero prior knowledge
+//   - Format: 8 mandatory sections, skip empty sections, no filler
+const defaultSummarizeInstruction = `You are a senior project manager performing a shift handover. Your task is to review this entire conversation and produce a Context Handover Document.
+
+Purpose: a brand-new AI instance with zero knowledge of this conversation must be able to continue seamlessly using only this document, without the user needing to re-explain anything.
+
+Write the document using exactly these sections. Skip any section that has no content — do not include empty placeholders.
+
+## Task Charter
+- Core objective: what is the user ultimately trying to achieve?
+- In scope: what is included in this task
+- Out of scope: what has been explicitly excluded
+- Success criteria: how do we know the task is done?
+
+## Stakeholder Profile
+- Expertise and domain knowledge level
+- Communication preferences (language, style, level of detail)
+- Important personal context that affects how to assist them
+
+## Current Status
+- Overall progress (e.g. phase 2/5, or percentage)
+- Last completed milestone
+- What is currently blocked or in progress
+
+## Deliverables Log
+List all outputs produced, with status and key content summary:
+- [done] item: summary...
+- [in progress] item: current state...
+
+## Decision Log
+Record every significant decision AND the reasoning behind it — the reasoning is the most important part:
+- Chose X over Y because...
+- Abandoned Z because...
+
+## Open Issues
+Unresolved items that need continued attention:
+- Issue: ... | Status: awaiting user input / needs more info / in progress
+
+## Constraints & Lessons Learned
+This is the most critical section. Record what went wrong and what must not be repeated:
+- Failed approach: tried X, it did not work because...
+- Hard constraint: ...
+- User explicitly emphasized: ...
+
+## Next Actions
+What the next shift should do immediately upon taking over:
+1. First action: ...
+2. Awaiting user input on: ... (if any)
+
+Rules: be concise. Omit pleasantries, reasoning chains, and redundant information. Every sentence must earn its place.`
 
 // compressWorker is the interface satisfied by the real genai worker and by
 // test mocks. It is kept package-private so callers outside internal/memory
 // never depend on it directly.
 type compressWorker interface {
-	Summarize(ctx context.Context, model, prompt string) (string, *WorkerUsageMetadata, error)
+	Summarize(ctx context.Context, model string, contents []*genai.Content) (string, *WorkerUsageMetadata, error)
 }
 
 // Generational is the MVP CompressStrategy: select the oldest N turns and
@@ -95,21 +161,18 @@ type Generational struct {
 }
 
 // NewGenerational constructs a Generational strategy using a real genai-backed worker.
-// If cfg.OldestN is zero the default of 5 is applied. If cfg.PromptStore is nil,
-// a DirStore pointed at the prompts/ directory relative to the current working
-// directory is used.
-func NewGenerational(cfg GenerationalConfig, worker compressWorker) *Generational {
-	if cfg.OldestN <= 0 {
-		cfg.OldestN = 5
+// If cfg.TurnsToKeep is zero, it is computed from the profile as
+// ContextWindowTokens / MaxOutputTokens (capped at a minimum of 2).
+// If cfg.SummarizeInstruction is empty the default instruction is used.
+func NewGenerational(cfg GenerationalConfig, worker compressWorker, profile ModelProfile) *Generational {
+	if cfg.TurnsToKeep <= 0 && profile.MaxOutputTokens > 0 {
+		cfg.TurnsToKeep = profile.ContextWindowTokens / profile.MaxOutputTokens
 	}
-	if cfg.PromptStore == nil {
-		store, err := dp.NewDirStore("prompts")
-		if err != nil {
-			// DirStore creation only fails on absolute path resolution; fall back
-			// gracefully — buildPrompt will return an error at render time.
-			store = nil
-		}
-		cfg.PromptStore = store
+	if cfg.TurnsToKeep < 2 {
+		cfg.TurnsToKeep = 2
+	}
+	if cfg.SummarizeInstruction == "" {
+		cfg.SummarizeInstruction = defaultSummarizeInstruction
 	}
 	return &Generational{cfg: cfg, worker: worker}
 }
@@ -117,107 +180,62 @@ func NewGenerational(cfg GenerationalConfig, worker compressWorker) *Generationa
 // Name returns "generational".
 func (g *Generational) Name() string { return "generational" }
 
-// SelectCandidates returns the min(OldestN, len(activeTurns)) oldest turns in
-// original order. Never panics on empty or short slices.
+// SelectCandidates keeps the most recent TurnsToKeep turns and returns all
+// older turns as compression candidates. Never panics on empty or short slices.
 func (g *Generational) SelectCandidates(activeTurns []ConversationTurn, _ int) []ConversationTurn {
-	n := g.cfg.OldestN
-	if n > len(activeTurns) {
-		n = len(activeTurns)
-	}
-	if n == 0 {
+	toCompress := len(activeTurns) - g.cfg.TurnsToKeep
+	if toCompress <= 0 {
 		return []ConversationTurn{}
 	}
-	// Allocate a new backing array and copy the first n turns into it.
+	// Allocate a new backing array and copy the oldest turns into it.
 	// Mutations to the returned slice do not affect activeTurns.
-	result := make([]ConversationTurn, n)
-	copy(result, activeTurns[:n])
+	result := make([]ConversationTurn, toCompress)
+	copy(result, activeTurns[:toCompress])
 	return result
 }
 
-// formatTurns renders conversation turns as a plain text block for use as the
-// "turns" input variable to the dotprompt template.
-func formatTurns(turns []ConversationTurn) string {
-	var sb strings.Builder
-	for _, t := range turns {
-		sb.WriteString("[")
-		sb.WriteString(t.Role)
-		sb.WriteString("]: ")
-		sb.WriteString(t.Content)
-		sb.WriteString("\n")
+// buildForkContents assembles the forked conversation: system instruction +
+// subsession history + summarize instruction as the final user turn.
+// This is the "child process image" that the compress worker will execute.
+func (g *Generational) buildForkContents(fork *ForkRequest) []*genai.Content {
+	var contents []*genai.Content
+
+	// System instruction (from the parent process).
+	if fork.SystemInstruction != nil {
+		contents = append(contents, fork.SystemInstruction)
 	}
-	return sb.String()
+
+	// Subsession history — the conversation turns being compressed.
+	contents = append(contents, fork.History...)
+
+	// Summarize instruction — the "exec" in the forked process.
+	contents = append(contents, &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: g.cfg.SummarizeInstruction}},
+	})
+
+	return contents
 }
 
-// buildPrompt loads the summarize prompt from the PromptStore, renders it with
-// the given existingSummary and turns, and returns the rendered text.
-// Returns (string, error) — never falls back silently on load or render failure.
-func (g *Generational) buildPrompt(existingSummary string, turns []ConversationTurn) (string, error) {
-	if g.cfg.PromptStore == nil {
-		return "", fmt.Errorf("buildPrompt: PromptStore is nil — no prompt source available")
-	}
-
-	promptData, err := g.cfg.PromptStore.Load("summarize", dp.LoadPromptOptions{})
-	if err != nil {
-		return "", fmt.Errorf("buildPrompt: failed to load summarize prompt: %w", err)
-	}
-
-	engine := dp.NewDotprompt(nil)
-	promptFunc, err := engine.Compile(promptData.Source, nil)
-	if err != nil {
-		return "", fmt.Errorf("buildPrompt: failed to compile prompt template: %w", err)
-	}
-
-	formattedTurns := formatTurns(turns)
-	if formattedTurns == "" {
-		return "", fmt.Errorf("buildPrompt: turns must not be empty")
-	}
-
-	input := map[string]any{
-		"turns": formattedTurns,
-	}
-	if existingSummary != "" {
-		input["existingSummary"] = existingSummary
-	}
-
-	rendered, err := promptFunc(&dp.DataArgument{Input: input}, nil)
-	if err != nil {
-		return "", fmt.Errorf("buildPrompt: failed to render prompt: %w", err)
-	}
-
-	// Extract text from rendered messages. dotprompt renders the template body
-	// as a single user-role message with one or more TextPart content items.
-	var sb strings.Builder
-	for _, msg := range rendered.Messages {
-		for _, part := range msg.Content {
-			if tp, ok := part.(*dp.TextPart); ok {
-				sb.WriteString(tp.Text)
-			}
-		}
-	}
-	return sb.String(), nil
-}
-
-// Compress invokes the compress worker to summarize candidates.
+// Compress forks the current subsession and asks the compress worker to
+// summarize it. The fork carries the system instruction and conversation
+// history, preserving the full multi-turn structure instead of flattening
+// to plain text.
+//
 // The effective model is determined by profile.GetEffectiveCompressModelID().
-// Returns (nil, error) if buildPrompt or the worker fails — never a partial CompressResult.
-func (g *Generational) Compress(ctx context.Context, candidates []ConversationTurn, existingSummary string, profile ModelProfile) (*CompressResult, error) {
+// Returns (nil, error) if the worker fails — never a partial CompressResult.
+func (g *Generational) Compress(ctx context.Context, fork *ForkRequest, profile ModelProfile) (*CompressResult, error) {
 	if g.worker == nil {
 		return nil, fmt.Errorf("compress: worker is nil — inject a compressWorker via NewGenerational before calling Compress")
 	}
+	if fork == nil || len(fork.History) == 0 {
+		return nil, fmt.Errorf("compress: fork has no history to compress")
+	}
 
 	modelID := profile.GetEffectiveCompressModelID()
-	prompt, err := g.buildPrompt(existingSummary, candidates)
-	if err != nil {
-		return nil, fmt.Errorf("compress: %w", err)
-	}
+	contents := g.buildForkContents(fork)
 
-	// Count original tokens from candidate turns.
-	originalTokens := 0
-	for _, t := range candidates {
-		originalTokens += t.TokenCount
-	}
-
-	summaryText, usage, err := g.worker.Summarize(ctx, modelID, prompt)
+	summaryText, usage, err := g.worker.Summarize(ctx, modelID, contents)
 	if err != nil {
 		return nil, fmt.Errorf("compress worker failed: %w", err)
 	}
@@ -226,6 +244,13 @@ func (g *Generational) Compress(ctx context.Context, candidates []ConversationTu
 	compressedTokens := 0
 	if usage != nil {
 		compressedTokens = int(usage.CandidatesTokenCount)
+	}
+
+	// OriginalTokens is estimated from prompt token count (includes system +
+	// history + instruction). Not exact per-candidate, but directionally correct.
+	originalTokens := 0
+	if usage != nil {
+		originalTokens = int(usage.PromptTokenCount)
 	}
 
 	var ratio float64
@@ -266,7 +291,7 @@ func NewStrategyRegistry() *StrategyRegistry {
 		factories: make(map[string]StrategyFactory),
 	}
 	r.Register("generational", func() CompressStrategy {
-		return NewGenerational(defaultGenerationalConfig(), nil)
+		return NewGenerational(GenerationalConfig{}, nil, ModelProfile{})
 	})
 	return r
 }
@@ -305,20 +330,11 @@ func NewGenaiWorker(client *genai.Client) *GenaiWorker {
 	return &GenaiWorker{client: client}
 }
 
-// Summarize sends prompt to the model identified by modelName and returns the
-// generated text along with token-usage figures. Returns (_, nil, error) on
-// any API or response-parsing failure; the caller (Generational.Compress) is
-// responsible for propagating the error as (nil, error).
-func (w *GenaiWorker) Summarize(ctx context.Context, modelName, prompt string) (string, *WorkerUsageMetadata, error) {
-	contents := []*genai.Content{
-		{
-			Role: "user",
-			Parts: []*genai.Part{
-				{Text: prompt},
-			},
-		},
-	}
-
+// Summarize sends the forked conversation contents to the model and returns the
+// generated summary text along with token-usage figures. The contents include
+// the system instruction, conversation history, and summarize instruction as
+// structured multi-turn content — preserving the full conversation shape.
+func (w *GenaiWorker) Summarize(ctx context.Context, modelName string, contents []*genai.Content) (string, *WorkerUsageMetadata, error) {
 	resp, err := w.client.Models.GenerateContent(ctx, modelName, contents, nil)
 	if err != nil {
 		return "", nil, fmt.Errorf("genai GenerateContent failed for model %q: %w", modelName, err)
