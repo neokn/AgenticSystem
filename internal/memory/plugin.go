@@ -183,14 +183,17 @@ func newMemoryPluginWithDeps(
 
 // BuildPlugin creates and returns a plugin.Plugin configured with this
 // MemoryPlugin's Before/AfterModel callbacks. Register the returned plugin
-// with the ADK runner.
-func (p *MemoryPlugin) BuildPlugin() *plugin.Plugin {
-	pl, _ := plugin.New(plugin.Config{
+// with the ADK runner. Returns an error if plugin.New fails (e.g. invalid name).
+func (p *MemoryPlugin) BuildPlugin() (*plugin.Plugin, error) {
+	pl, err := plugin.New(plugin.Config{
 		Name:                "memory_plugin",
 		BeforeModelCallback: p.beforeModelCallback,
 		AfterModelCallback:  p.afterModelCallback,
 	})
-	return pl
+	if err != nil {
+		return nil, fmt.Errorf("memory_plugin: BuildPlugin: %w", err)
+	}
+	return pl, nil
 }
 
 // GetSnapshot returns a point-in-time copy of the plugin's metrics. Safe to
@@ -354,8 +357,9 @@ func (p *MemoryPlugin) runBeforeModel(ctx context.Context, req *model.LLMRequest
 // triggerCompression calls the CompressStrategy to select candidates and compress
 // them, then rewrites req.Contents. All state updates are done under mu.
 func (p *MemoryPlugin) triggerCompression(ctx context.Context, req *model.LLMRequest) (*model.LLMResponse, error) {
-	// Build active turns from req.Contents (all except the last user message).
-	activeTurns := contentsToTurns(req.Contents)
+	// Build active turns from req.Contents excluding the last element (new user
+	// message). The new user message must NOT be a compression candidate.
+	activeTurns := contentsToTurns(req.Contents[:len(req.Contents)-1])
 	targetReclaim := p.profile.MaxOutputTokens // conservative reclaim target
 
 	// Read existingSummary without holding mu during the compress call.
@@ -529,15 +533,17 @@ func (p *MemoryPlugin) returnOOMWarning(preciseTotal int, reason string) (*model
 // ---------------------------------------------------------------------------
 
 // countMsgTokens counts tokens for a slice of content using the offline tokenizer.
-// Returns 0 on error (conservative: offline estimate may under-count, but the
-// second layer API call will catch it).
+// Returns p.profile.MaxOutputTokens on tokenizer error — a conservative fallback
+// that intentionally over-estimates so the second layer API call is always
+// triggered rather than silently skipped.
 func (p *MemoryPlugin) countMsgTokens(contents []*genai.Content) int {
 	result, err := p.tc.CountTokens(contents, nil)
 	if err != nil {
-		slog.Warn("memory_plugin: offline CountTokens failed; using 0",
+		slog.Warn("memory_plugin: offline CountTokens failed; using MaxOutputTokens as conservative fallback",
 			"error", err,
+			"fallback", p.profile.MaxOutputTokens,
 		)
-		return 0
+		return p.profile.MaxOutputTokens
 	}
 	return int(result.TotalTokens)
 }
@@ -593,9 +599,15 @@ func buildCompressedContents(req *model.LLMRequest, summaryText string, compress
 
 	var result []*genai.Content
 
-	// Include system prompt if present in Config.
+	// Include system prompt from Config if present, but only if it is not
+	// already the first element of req.Contents. ADK may materialise
+	// Config.SystemInstruction as contents[0] (role "system" or empty role),
+	// in which case prepending it again would duplicate the system prompt.
 	if req.Config != nil && req.Config.SystemInstruction != nil {
-		result = append(result, req.Config.SystemInstruction)
+		alreadyFirst := len(contents) > 0 && contents[0] == req.Config.SystemInstruction
+		if !alreadyFirst {
+			result = append(result, req.Config.SystemInstruction)
+		}
 	}
 
 	// Summary turn (model role, so it doesn't look like a user message).

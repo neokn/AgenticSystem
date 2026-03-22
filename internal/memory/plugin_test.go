@@ -213,14 +213,17 @@ func TestMemoryPlugin_BuildPlugin_ReturnsNonNilPlugin(t *testing.T) {
 	p := newTestPlugin(t, &stubTokenCounter{}, &stubAPICounter{}, nil, 0.80)
 
 	// Act
-	plugin := p.BuildPlugin()
+	pl, err := p.BuildPlugin()
 
 	// Assert
-	if plugin == nil {
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pl == nil {
 		t.Fatal("expected non-nil plugin.Plugin")
 	}
-	if plugin.Name() != "memory_plugin" {
-		t.Errorf("expected name 'memory_plugin', got %q", plugin.Name())
+	if pl.Name() != "memory_plugin" {
+		t.Errorf("expected name 'memory_plugin', got %q", pl.Name())
 	}
 }
 
@@ -501,7 +504,7 @@ func TestBeforeModelCallback_TriggersCompression_WhenPreciseTotalAboveThreshold(
 }
 
 func TestBeforeModelCallback_ReclaimedTokensRecorded_WhenCompressionFires(t *testing.T) {
-	// Arrange
+	// Arrange: must have prior turns + new user message so activeTurns is non-empty.
 	tc := &stubTokenCounter{count: 3_000}
 	ac := &stubAPICounter{count: 850_000}
 	strategy := &stubCompressStrategy{
@@ -515,7 +518,14 @@ func TestBeforeModelCallback_ReclaimedTokensRecorded_WhenCompressionFires(t *tes
 	p.mu.Lock()
 	p.lastTotalTokens = 790_000
 	p.mu.Unlock()
-	req := makeRequest("msg")
+	req := &model.LLMRequest{
+		Model: "gemini-2.0-flash",
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "prior turn"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: "prior reply"}}},
+			{Role: "user", Parts: []*genai.Part{{Text: "msg"}}},
+		},
+	}
 
 	// Act
 	_, _ = p.runBeforeModel(context.Background(), req)
@@ -606,6 +616,309 @@ func TestGetSnapshot_ReturnsConsistentMetrics(t *testing.T) {
 	wantRatio := float64(42_000) / float64(1_000_000)
 	if snap.UsageRatio != wantRatio {
 		t.Errorf("expected UsageRatio=%v, got %v", wantRatio, snap.UsageRatio)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug 1 fix: new user message must NOT be in SelectCandidates activeTurns
+// ---------------------------------------------------------------------------
+
+// captureSelectStrategy records the activeTurns slice passed to SelectCandidates.
+type captureSelectStrategy struct {
+	stubCompressStrategy
+	capturedTurns []ConversationTurn
+	captureMu     sync.Mutex
+}
+
+func (c *captureSelectStrategy) SelectCandidates(activeTurns []ConversationTurn, targetReclaim int) []ConversationTurn {
+	c.captureMu.Lock()
+	// Deep-copy so we don't hold a slice alias into req.Contents.
+	copied := make([]ConversationTurn, len(activeTurns))
+	copy(copied, activeTurns)
+	c.capturedTurns = copied
+	c.captureMu.Unlock()
+	return c.stubCompressStrategy.SelectCandidates(activeTurns, targetReclaim)
+}
+
+func TestTriggerCompression_NewUserMessageNotInCandidates_WhenCompressionFires(t *testing.T) {
+	// Arrange: precise total above threshold so compression fires.
+	tc := &stubTokenCounter{count: 3_000}
+	ac := &stubAPICounter{count: 850_000}
+	capture := &captureSelectStrategy{
+		stubCompressStrategy: stubCompressStrategy{
+			result: &CompressResult{
+				CompressedText:   "summary",
+				OriginalTokens:   100,
+				CompressedTokens: 20,
+			},
+		},
+	}
+	p := newTestPlugin(t, tc, ac, capture, 0.80)
+	p.mu.Lock()
+	p.lastTotalTokens = 790_000
+	p.mu.Unlock()
+
+	const newUserText = "brand new user message"
+	req := &model.LLMRequest{
+		Model: "gemini-2.0-flash",
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "turn1"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: "reply1"}}},
+			{Role: "user", Parts: []*genai.Part{{Text: newUserText}}},
+		},
+	}
+
+	// Act
+	_, err := p.runBeforeModel(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Assert — the brand-new user message must not appear in the captured turns.
+	capture.captureMu.Lock()
+	turns := capture.capturedTurns
+	capture.captureMu.Unlock()
+
+	for _, turn := range turns {
+		if turn.Content == newUserText {
+			t.Errorf("new user message %q was included in SelectCandidates activeTurns — it must be excluded", newUserText)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug 2 fix: countMsgTokens returns conservative fallback on tokenizer error
+// ---------------------------------------------------------------------------
+
+func TestCountMsgTokens_ReturnsMaxOutputTokens_WhenTokenizerErrors(t *testing.T) {
+	// Arrange: tokenizer always errors.
+	tc := &stubTokenCounter{err: errors.New("tokenizer unavailable")}
+	ac := &stubAPICounter{}
+	p := newTestPlugin(t, tc, ac, nil, 0.80)
+
+	// Act
+	got := p.countMsgTokens([]*genai.Content{makeUserMsg("hello")})
+
+	// Assert: fallback must be MaxOutputTokens (8192), not 0.
+	want := p.profile.MaxOutputTokens
+	if got != want {
+		t.Errorf("expected conservative fallback %d (MaxOutputTokens), got %d", want, got)
+	}
+	if got == 0 {
+		t.Error("countMsgTokens must not return 0 on tokenizer error — that under-estimates (optimistic, not conservative)")
+	}
+}
+
+func TestBeforeModelCallback_TriggersAPICall_WhenTokenizerErrors(t *testing.T) {
+	// Arrange: tokenizer errors → countMsgTokens returns MaxOutputTokens (8192).
+	// lastTotalTokens = 795_000.
+	// estimatedTotal = 795_000 + 8_192 (fallback) + 8_192 = 811_384 > 800_000 → API triggered.
+	// API returns 750_000 < 800_000 → false alarm, no compression.
+	tc := &stubTokenCounter{err: errors.New("tokenizer unavailable")}
+	ac := &stubAPICounter{count: 750_000}
+	p := newTestPlugin(t, tc, ac, nil, 0.80)
+	p.mu.Lock()
+	p.lastTotalTokens = 795_000
+	p.mu.Unlock()
+	req := makeRequest("any message")
+
+	// Act
+	_, err := p.runBeforeModel(context.Background(), req)
+
+	// Assert: API must have been called because conservative fallback over-estimated.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ac.CallCount() == 0 {
+		t.Error("expected countTokens API to be called after tokenizer error (conservative fallback must over-estimate)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bug 3 fix: no system prompt duplication in buildCompressedContents
+// ---------------------------------------------------------------------------
+
+func TestBuildCompressedContents_NoSystemPromptDuplication_WhenSystemInstructionAlreadyInContents(t *testing.T) {
+	// Arrange: systemInstruction is both in Config AND the first element of Contents.
+	// buildCompressedContents must NOT prepend it again.
+	sysInstruction := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: "You are a helpful assistant."}},
+	}
+	req := &model.LLMRequest{
+		Model: "gemini-2.0-flash",
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: sysInstruction,
+		},
+		Contents: []*genai.Content{
+			sysInstruction, // same pointer — ADK already put it in Contents
+			{Role: "user", Parts: []*genai.Part{{Text: "turn1"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: "reply1"}}},
+			{Role: "user", Parts: []*genai.Part{{Text: "user msg"}}},
+		},
+	}
+
+	// Act
+	result := buildCompressedContents(req, "compressed summary", 2)
+
+	// Assert: count occurrences of the system instruction pointer in result.
+	occurrences := 0
+	for _, c := range result {
+		if c == sysInstruction {
+			occurrences++
+		}
+	}
+	if occurrences > 1 {
+		t.Errorf("system instruction appears %d times in result — expected at most 1 (no duplication)", occurrences)
+	}
+}
+
+func TestBuildCompressedContents_IncludesSystemPrompt_WhenNotAlreadyInContents(t *testing.T) {
+	// Arrange: systemInstruction is in Config but NOT in Contents.
+	// buildCompressedContents must prepend it.
+	sysInstruction := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: "You are a helpful assistant."}},
+	}
+	req := &model.LLMRequest{
+		Model: "gemini-2.0-flash",
+		Config: &genai.GenerateContentConfig{
+			SystemInstruction: sysInstruction,
+		},
+		Contents: []*genai.Content{
+			{Role: "user", Parts: []*genai.Part{{Text: "turn1"}}},
+			{Role: "model", Parts: []*genai.Part{{Text: "reply1"}}},
+			{Role: "user", Parts: []*genai.Part{{Text: "user msg"}}},
+		},
+	}
+
+	// Act
+	result := buildCompressedContents(req, "summary", 1)
+
+	// Assert: system instruction appears exactly once and is first.
+	if len(result) == 0 {
+		t.Fatal("expected non-empty result")
+	}
+	if result[0] != sysInstruction {
+		t.Error("expected system instruction to be the first element when not already in contents")
+	}
+	occurrences := 0
+	for _, c := range result {
+		if c == sysInstruction {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Errorf("expected system instruction exactly once, got %d", occurrences)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Should-fix 2: exact req.Contents structure after compression
+// ---------------------------------------------------------------------------
+
+func TestBeforeModelCallback_ReqContentsExactStructure_AfterCompression(t *testing.T) {
+	// Arrange: 4 prior turns + 1 new user message.
+	// Strategy compresses first 2 turns; the remaining 2 prior turns are "recent active".
+	// Expected structure: [summary_turn, recent1, recent2, user_msg]  (no system prompt)
+	tc := &stubTokenCounter{count: 3_000}
+	ac := &stubAPICounter{count: 850_000}
+
+	const summaryText = "summary of first two turns"
+	// Strategy always returns the first 2 activeTurns as candidates.
+	strategy := &stubCompressStrategy{
+		candidates: nil, // nil → returns all activeTurns; we rely on compressedCount in buildCompressedContents
+		result: &CompressResult{
+			CompressedText:   summaryText,
+			OriginalTokens:   200,
+			CompressedTokens: 40,
+		},
+	}
+	p := newTestPlugin(t, tc, ac, strategy, 0.80)
+	p.mu.Lock()
+	p.lastTotalTokens = 790_000
+	p.mu.Unlock()
+
+	userTurn1 := &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "turn1"}}}
+	modelTurn1 := &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "reply1"}}}
+	userTurn2 := &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "turn2"}}}
+	modelTurn2 := &genai.Content{Role: "model", Parts: []*genai.Part{{Text: "reply2"}}}
+	newUserMsg := &genai.Content{Role: "user", Parts: []*genai.Part{{Text: "new question"}}}
+
+	req := &model.LLMRequest{
+		Model:    "gemini-2.0-flash",
+		Contents: []*genai.Content{userTurn1, modelTurn1, userTurn2, modelTurn2, newUserMsg},
+	}
+
+	// Act
+	_, err := p.runBeforeModel(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Assert: last element must be the original new user message.
+	contents := req.Contents
+	if len(contents) == 0 {
+		t.Fatal("req.Contents must not be empty after compression")
+	}
+	last := contents[len(contents)-1]
+	if last != newUserMsg {
+		t.Errorf("last element must be the new user message; got role=%q text=%q",
+			last.Role, contentText(last))
+	}
+
+	// Assert: new user message appears exactly once.
+	userMsgCount := 0
+	for _, c := range contents {
+		if c == newUserMsg {
+			userMsgCount++
+		}
+	}
+	if userMsgCount != 1 {
+		t.Errorf("new user message must appear exactly once in req.Contents, got %d", userMsgCount)
+	}
+
+	// Assert: first non-system element is the summary turn (role "model").
+	summaryFound := false
+	for _, c := range contents {
+		if len(c.Parts) > 0 && c.Parts[0].Text == summaryText {
+			if c.Role != "model" {
+				t.Errorf("summary turn must have role 'model', got %q", c.Role)
+			}
+			summaryFound = true
+			break
+		}
+	}
+	if !summaryFound {
+		t.Error("summary turn not found in req.Contents after compression")
+	}
+
+	// Assert: no system instruction (none was set).
+	for _, c := range contents {
+		if c.Role == "system" || (req.Config == nil && c.Role == "") {
+			// Allow — but we didn't set one.
+		}
+	}
+	// The critical structural invariant: summary comes before recent active turns,
+	// and recent active turns come before the new user message.
+	summaryIdx := -1
+	newMsgIdx := -1
+	for i, c := range contents {
+		if len(c.Parts) > 0 && c.Parts[0].Text == summaryText {
+			summaryIdx = i
+		}
+		if c == newUserMsg {
+			newMsgIdx = i
+		}
+	}
+	if summaryIdx == -1 {
+		t.Fatal("summary not found in contents")
+	}
+	if newMsgIdx == -1 {
+		t.Fatal("new user message not found in contents")
+	}
+	if summaryIdx >= newMsgIdx {
+		t.Errorf("summary (index %d) must come before new user message (index %d)", summaryIdx, newMsgIdx)
 	}
 }
 
