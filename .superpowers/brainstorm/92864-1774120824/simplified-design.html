@@ -1,0 +1,84 @@
+<h2>MVP 精簡設計</h2>
+<p class="subtitle">砍到最小可驗證單位——3 個 package 就夠</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>極簡：單一 package</h3>
+      <p>所有邏輯放 <code>internal/memory/</code>，一個 package 搞定</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0">
+<span style="color:#c792ea">agenticsystem/</span>
+├── go.mod
+├── <span style="color:#c792ea">cmd/agent/</span>
+│   └── main.go               <span style="color:#637777"># Demo agent</span>
+├── <span style="color:#c792ea">internal/memory/</span>            <span style="color:#637777"># 全部在這</span>
+│   ├── profile.go            <span style="color:#637777"># ModelProfile + 內建 profiles</span>
+│   ├── layout.go             <span style="color:#637777"># Segment 定義 + config</span>
+│   ├── plugin.go             <span style="color:#637777"># ADK Plugin（感測 + 觸發）</span>
+│   ├── session.go            <span style="color:#637777"># ManagedSessionService</span>
+│   ├── compress.go           <span style="color:#637777"># Strategy interface + Generational</span>
+│   ├── metrics.go            <span style="color:#637777"># 簡單的 struct 記錄</span>
+│   └── memory_test.go
+└── configs/
+    └── default.json
+      </div>
+      <p style="color:#addb67;margin-top:8px">~7 個檔案。最快交付。等到檔案長到不舒服再拆。</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>適中：3 packages（依自然邊界拆）</h3>
+      <p>只在「真正需要隔離」的地方拆——compress 有 interface 要獨立，其餘合併</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0">
+<span style="color:#c792ea">agenticsystem/</span>
+├── go.mod
+├── <span style="color:#c792ea">cmd/agent/</span>
+│   └── main.go
+├── <span style="color:#c792ea">internal/</span>
+│   ├── <span style="color:#c792ea">memory/</span>               <span style="color:#637777"># 核心：Plugin + Session + Layout + Tracker + OOM</span>
+│   │   ├── manager.go        <span style="color:#637777"># MemoryManager（組裝入口）</span>
+│   │   ├── plugin.go         <span style="color:#637777"># ADK Plugin callbacks</span>
+│   │   ├── session.go        <span style="color:#637777"># ManagedSessionService</span>
+│   │   ├── layout.go         <span style="color:#637777"># Segments + config + rebalance</span>
+│   │   ├── tracker.go        <span style="color:#637777"># Token tracking + trigger</span>
+│   │   ├── metrics.go        <span style="color:#637777"># Metrics struct</span>
+│   │   └── memory_test.go
+│   ├── <span style="color:#c792ea">compress/</span>             <span style="color:#637777"># 獨立：因為有 Strategy interface</span>
+│   │   ├── strategy.go       <span style="color:#637777"># interface + CompressResult</span>
+│   │   ├── generational.go   <span style="color:#637777"># MVP 策略</span>
+│   │   ├── worker.go         <span style="color:#637777"># 獨立 ADK Runner 做壓縮</span>
+│   │   └── compress_test.go
+│   └── <span style="color:#c792ea">profile/</span>              <span style="color:#637777"># 獨立：被 memory 和 compress 共用</span>
+│       ├── profile.go        <span style="color:#637777"># ModelProfile + Registry</span>
+│       └── defaults.go       <span style="color:#637777"># Gemini 內建</span>
+└── configs/
+    └── default.json
+      </div>
+      <p style="color:#addb67;margin-top:8px">~12 個檔案。compress 獨立是因為可插拔；profile 獨立是因為被共用。其餘全合在 memory/。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:16px;background:#1a1a2e;border-radius:8px;">
+  <h3 style="color:#c792ea;margin-top:0">對比之前的設計</h3>
+  <table style="width:100%;color:#e0e0e0;font-size:13px;border-collapse:collapse">
+    <tr style="border-bottom:1px solid #2a2a4a">
+      <td style="padding:8px;color:#637777">之前</td>
+      <td style="padding:8px">8 packages, ~16 files</td>
+      <td style="padding:8px;color:#f78c6c">profile, layout, tracker, trigger, compress, oom, metrics, plugin, session</td>
+    </tr>
+    <tr style="border-bottom:1px solid #2a2a4a">
+      <td style="padding:8px;color:#637777">A</td>
+      <td style="padding:8px">1 package, ~7 files</td>
+      <td style="padding:8px;color:#addb67">全部在 memory/</td>
+    </tr>
+    <tr>
+      <td style="padding:8px;color:#637777">B</td>
+      <td style="padding:8px">3 packages, ~12 files</td>
+      <td style="padding:8px;color:#addb67">memory/ + compress/ + profile/</td>
+    </tr>
+  </table>
+</div>

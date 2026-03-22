@@ -1,0 +1,176 @@
+title: 專案初始化（Go module + ADK 依賴 + 目錄結構）
+labels: [backend, core-logic]
+depends-on: []
+completed-by:
+  backlog: jules
+  refined: jensen
+acceptance:
+  # Happy path — successful scaffold
+  - given: 空專案目錄（僅含 docs/）
+    when: 執行 go mod init github.com/neokn/agenticsystem
+    then: go.mod 存在，module 路徑為 github.com/neokn/agenticsystem，go directive 為 1.24 以上
+
+  - given: go.mod 已建立
+    when: 執行 go get google.golang.org/adk@v0.6 及 google.golang.org/genai
+    then: go.mod require 區段包含兩個依賴；go.sum 存在且包含對應 hash；go mod verify 通過
+
+  - given: 所有依賴已 fetch、骨架檔案已建立
+    when: 執行 go build ./...
+    then: 零編譯錯誤；零 warning；輸出 binary 可在 cmd/agent/ 產生（或 go build 不報錯即可）
+
+  # Edge / failure scenarios
+  - given: cmd/agent/main.go 骨架中 import ADK package
+    when: ADK import path 拼錯或版本不存在
+    then: go build 報 cannot find module 或 no required module provides；錯誤訊息明確指出問題 package
+
+  - given: configs/default.json 內容為空 JSON 物件 {}
+    when: go build ./... 或 go vet ./...
+    then: 不因 JSON 格式而造成 build/vet 失敗（JSON 解析留給 runtime）
+
+  - given: internal/memory/ 目錄存在但為空（無 .go 檔）
+    when: 執行 go build ./...
+    then: build 成功（空 package 目錄不影響 build）；未來新增 .go 檔不需變更 go.mod
+
+architecture:
+  component: memory
+  layer: Infrastructure
+  pattern: none — pure project scaffolding; no behavioural pattern warranted at this stage
+  boundary: |
+    No ports or adapters in this card. This card establishes the module root and
+    dependency graph only. Future cards (S0-S4) will define ports (CompressStrategy
+    interface, ModelProfile loader) inside internal/memory/ and the driving adapter
+    entry point in cmd/agent/main.go.
+  notes: |
+    Conventions established by this scaffolding card:
+
+    1. MODULE PATH: github.com/neokn/agenticsystem
+       All import paths in the project start with this prefix. Once go.sum is
+       committed this is immutable — verify carefully before running go mod init.
+
+    2. DIRECTORY MAPPING TO EXPLICIT ARCHITECTURE LAYERS:
+         cmd/agent/main.go        -> UI / Driving Adapter (wires Runner + Plugin)
+         internal/memory/*.go     -> Application Layer + Domain Layer (co-located)
+         configs/default.json     -> Infrastructure config, parsed at startup
+
+       Co-locating Application and Domain in a single package is acceptable for
+       MVP given the spec's explicit "internal-first, single package" decision.
+       Split into sub-packages when the package exceeds ~5-6 files or distinct
+       domain concepts need isolation.
+
+    3. INTERNAL PACKAGE BOUNDARY:
+       Go's `internal/` rule enforces that only code rooted at agenticsystem/ can
+       import internal/memory. This satisfies the component isolation principle at
+       the module level without extra tooling.
+
+    4. ERROR HANDLING CONVENTION:
+       Return (value, error) — standard Go idiom. No panic except unrecoverable
+       programmer errors (nil config at startup). Use sentinel error values for
+       cases where callers need to branch (e.g. ErrOOM, ErrConfigInvalid) rather
+       than error string matching.
+
+    5. CONFIG LOADING CONVENTION:
+       configs/default.json is parsed at startup in main.go into a Go config struct
+       defined in internal/memory/. main.go passes the struct into MemoryPlugin via
+       constructor — no global config variable, no init() side effects. Config
+       validation (missing required fields) happens at construction time and returns
+       an error, not a panic.
+
+    6. ADK COUPLING BOUNDARY:
+       cmd/agent/main.go imports the ADK runner and wires the Plugin. The
+       internal/memory/ package implements ADK's Plugin interface callbacks
+       (BeforeModel / AfterModel) but should not import ADK types deeper than the
+       callback signatures require. This keeps internal/memory/ testable without
+       a full ADK runner.
+
+    7. GO VERSION: 1.24+ required (genai tokenizer sub-package dependency).
+
+assignee:
+history:
+  - stage: backlog
+    at: 2026-03-22T12:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T13:00:00+08:00
+  - stage: in-progress
+    at: 2026-03-22T14:00:00+08:00
+description: |
+  初始化 Go module、引入 ADK Go 依賴、建立專案目錄結構。
+
+  技術決策：
+  - module path: github.com/neokn/agenticsystem
+  - Go 1.24.4+
+  - google.golang.org/adk v0.6
+  - google.golang.org/genai（含 tokenizer）
+  - 單一 internal/memory/ package
+
+  目錄結構：
+  agenticsystem/
+  ├── go.mod
+  ├── cmd/agent/main.go
+  ├── internal/memory/
+  └── configs/default.json
+
+  注意：internal/memory/ 此卡只建目錄，不放任何 .go 原始碼。
+  實際 package 實作由後續 S0–S4 卡負責。
+
+tasks:
+  - text: "go mod init github.com/neokn/agenticsystem（確認 go directive >= 1.24）"
+    done: false
+  - text: "go get google.golang.org/adk@v0.6"
+    done: false
+  - text: "go get google.golang.org/genai（含 tokenizer sub-package）"
+    done: false
+  - text: "建立 cmd/agent/main.go：package main + import _ ADK runner package（空 main func）"
+    done: false
+  - text: "建立 internal/memory/.gitkeep（確保空目錄被 git 追蹤）"
+    done: false
+  - text: "建立 configs/default.json：最小合法 JSON {} 骨架，加上 TODO 欄位佔位 comment"
+    done: false
+  - text: "執行 go build ./... 確認零錯誤"
+    done: false
+  - text: "執行 go vet ./... 確認零警告"
+    done: false
+
+comments:
+  - author: jules
+    at: 2026-03-22T13:00:00+08:00
+    text: |
+      refinement 摘要：
+
+      原卡缺少 acceptance criteria，全部補齊（3 happy path + 3 edge cases）。
+
+      任務層面的調整：
+      1. 將「go get ADK + genai」拆成兩個獨立任務，方便分別確認版本鎖定。
+      2. internal/memory/ 改為建立 .gitkeep，確保空目錄進 git；明確說明此卡不寫 .go 原始碼。
+      3. 新增 go vet ./... 作為獨立驗收任務（go build 通過不等於 vet 乾淨）。
+      4. configs/default.json 說明只需合法 JSON，parse 邏輯留給 runtime。
+
+      拆分評估：此卡純粹是 project scaffold，所有任務都在同一個工作流裡
+      （init → fetch → scaffold → verify），不跨元件，合計工時 < 2 小時，不需拆分。
+
+  - author: jensen
+    at: 2026-03-22T14:00:00+08:00
+    text: |
+      architecture review:
+
+      Component: memory — sole bounded context for the MVP per spec decision.
+      Go's internal/ rule enforces the boundary at the module level without additional
+      tooling.
+
+      Layer assignment: Infrastructure (this card), with cmd/agent/main.go as the
+      Driving Adapter entry point. internal/memory/ will co-locate Application +
+      Domain layers — proportionate for MVP scale, consistent with spec's
+      "internal-first, single package" decision.
+
+      Pattern: none. This card is pure scaffolding. Design patterns (Strategy for
+      CompressStrategy, possible Factory Method for ModelProfile loading) will be
+      evaluated on S0-S4 cards where actual behaviour is defined.
+
+      Key conventions locked in:
+      - Module path github.com/neokn/agenticsystem is immutable once go.sum lands.
+      - Config injected via constructors — no global state, no init() side effects.
+      - (value, error) return convention; sentinel errors for branching (ErrOOM etc).
+      - ADK coupling stays in cmd/; internal/memory/ testable without a full runner.
+
+      No card split — single component, single work stream, < 2h.
+      No ADR produced — project structure is already captured in the spec and the
+      decision is not independently reversible at this stage.

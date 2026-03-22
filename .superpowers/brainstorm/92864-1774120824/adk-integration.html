@@ -1,0 +1,105 @@
+<h2>Memory Manager × ADK Go 整合方式</h2>
+<p class="subtitle">ADK 已經有 Plugin 系統和 Session 管理——Memory Manager 該怎麼嵌入？</p>
+
+<div class="section">
+  <p>ADK Go 提供了 <code>AfterModelCallback</code> 可以讀取 <code>UsageMetadata</code>（token 計數），
+  <code>BeforeModelCallback</code> 可以在 LLM call 前攔截（觸發壓縮），
+  <code>Session</code> 已經管理對話歷史。</p>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>ADK Plugin（推薦）</h3>
+      <p>Memory Manager 實作為 <code>plugin.Plugin</code>，掛載到 Runner 上</p>
+      <div style="background:#1a1a2e;padding:12px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:13px;line-height:1.6;color:#e0e0e0">
+        <span style="color:#7fdbca">Runner</span><br>
+        &nbsp;├─ <span style="color:#c792ea">MemoryManagerPlugin</span> ← 你的 Memory Manager<br>
+        &nbsp;│&nbsp;&nbsp;├─ <span style="color:#addb67">AfterModelCallback</span> → 讀 UsageMetadata（S2）<br>
+        &nbsp;│&nbsp;&nbsp;├─ <span style="color:#addb67">BeforeModelCallback</span> → 檢查壓力、觸發壓縮（S3）<br>
+        &nbsp;│&nbsp;&nbsp;├─ <span style="color:#addb67">OnEventCallback</span> → 追蹤每輪 turn（S2）<br>
+        &nbsp;│&nbsp;&nbsp;└─ <span style="color:#addb67">BeforeRunCallback</span> → 初始化 Layout（S1）<br>
+        &nbsp;├─ Agent（llmagent）<br>
+        &nbsp;└─ SessionService（ADK 內建）
+      </div>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>最乾淨的整合——用 ADK 原生擴展點</li>
+          <li>自動應用到 Runner 下所有 Agent</li>
+          <li>Plugin callbacks 優先於 agent callbacks</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>受限於 Plugin interface 能力</li>
+          <li>Session 的 Event 管理仍由 ADK 控制</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Custom SessionService Wrapper</h3>
+      <p>包裝 ADK 的 <code>session.Service</code>，在 Session 層面控制歷史</p>
+      <div style="background:#1a1a2e;padding:12px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:13px;line-height:1.6;color:#e0e0e0">
+        <span style="color:#7fdbca">Runner</span><br>
+        &nbsp;├─ Agent<br>
+        &nbsp;└─ <span style="color:#c792ea">ManagedSessionService</span> ← 你的 wrapper<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├─ <span style="color:#addb67">Get()</span> → 返回壓縮後的歷史<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├─ <span style="color:#addb67">AppendEvent()</span> → 追蹤 + 可能觸發壓縮<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;└─ <span style="color:#82aaff">InnerSessionService</span>（原始 ADK service）
+      </div>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>完全控制對話歷史的讀寫</li>
+          <li>壓縮在 Session 層發生，語意更清楚</li>
+          <li>可攔截 Get() 返回壓縮後的 events</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>需要實作完整的 SessionService interface</li>
+          <li>Token 計數需要另外取得（搭配 Plugin 或 Callback）</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Plugin + SessionService 混合</h3>
+      <p>Plugin 做感測（token tracking, trigger），SessionService wrapper 做執行（壓縮歷史）</p>
+      <div style="background:#1a1a2e;padding:12px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:13px;line-height:1.6;color:#e0e0e0">
+        <span style="color:#7fdbca">Runner</span><br>
+        &nbsp;├─ <span style="color:#c792ea">MemoryPlugin</span>（感測層）<br>
+        &nbsp;│&nbsp;&nbsp;├─ <span style="color:#addb67">AfterModelCallback</span> → token tracking<br>
+        &nbsp;│&nbsp;&nbsp;└─ <span style="color:#addb67">BeforeModelCallback</span> → trigger 判斷<br>
+        &nbsp;├─ Agent<br>
+        &nbsp;└─ <span style="color:#c792ea">ManagedSessionService</span>（執行層）<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;├─ 持有 MemoryLayout + CompressStrategy<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;└─ 被 Plugin 通知後執行壓縮
+      </div>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>關注點分離：感測 vs 執行</li>
+          <li>各自用最適合的 ADK 擴展點</li>
+          <li>最大彈性</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>兩個元件需要互相通訊</li>
+          <li>複雜度最高</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:16px;background:#1a1a2e;border-radius:8px;">
+  <h3 style="color:#c792ea;margin-top:0">🔑 關鍵發現</h3>
+  <ul style="color:#e0e0e0;line-height:1.8">
+    <li>ADK 的 <code>resp.UsageMetadata</code> 直接提供 <code>PromptTokenCount</code> / <code>CandidatesTokenCount</code> / <code>TotalTokenCount</code> — 完美對應 S2 的需求</li>
+    <li>ADK Session 已有 Event 概念 — 你的 ConversationTurn 可以映射到 ADK Event</li>
+    <li>Compress Worker 可以用獨立的 <code>llmagent</code> + 獨立 Runner（隔離 context window）</li>
+    <li>ADK 預設支援 Gemini，但標榜 model-agnostic — 需要確認 OpenAI/Anthropic adapter 成熟度</li>
+  </ul>
+</div>

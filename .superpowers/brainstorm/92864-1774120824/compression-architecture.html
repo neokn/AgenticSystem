@@ -1,0 +1,128 @@
+<h2>核心架構：壓縮如何操作 ADK Session？</h2>
+<p class="subtitle">Memory Manager 需要在「ADK 管理對話歷史」的前提下，執行有損壓縮</p>
+
+<div class="section" style="padding:16px;background:#0d1b2a;border-radius:8px;border:1px solid #1b2838;margin-bottom:20px">
+  <h3 style="color:#7fdbca;margin-top:0">問題本質</h3>
+  <p style="color:#e0e0e0;line-height:1.8">
+    ADK Runner 每輪自動把 Events append 到 Session。但壓縮需要<strong>替換</strong>舊 Events 為摘要。<br>
+    這就像 OS 的 page compaction 需要修改 page table——Memory Manager 必須能改寫 Session 的「記憶體」。
+  </p>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>BeforeModel 攔截（推薦）</h3>
+      <p>Plugin 在 <code>BeforeModelCallback</code> 中改寫送給 LLM 的 request</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0">
+<span style="color:#637777">/* 資料流 */</span>
+
+<span style="color:#addb67">ADK Session</span>（完整歷史，不動）
+  │
+  ▼  <span style="color:#637777">Runner 準備 LLM Request</span>
+  │
+<span style="color:#c792ea">BeforeModelCallback</span>（Memory Manager 攔截）
+  │
+  ├─ 檢查 memory pressure（S3）
+  ├─ 如果需要壓縮：
+  │    ├─ 從 req.Contents 中取出舊 turns
+  │    ├─ 用獨立 Runner 執行壓縮（S4）
+  │    ├─ 把壓縮結果存到 <span style="color:#addb67">Plugin 內部 state</span>
+  │    └─ 改寫 req.Contents = [summary] + [recent turns]
+  ├─ 如果不需要壓縮：pass through
+  │
+  ▼
+<span style="color:#addb67">LLM API Call</span>（只看到壓縮後的 context）
+  │
+  ▼
+<span style="color:#c792ea">AfterModelCallback</span>（讀取 UsageMetadata → S2）
+      </div>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li><strong>不修改 ADK Session</strong>——完整歷史保留，壓縮只影響送給 LLM 的內容</li>
+          <li>Session 作為 audit log / 完整記錄，壓縮是「view」不是「mutation」</li>
+          <li>回溯、debug 時可以看到原始對話</li>
+          <li>實作最簡單——只需操作 LLMRequest</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Session 會無限成長（但 MVP 是 single session，可接受）</li>
+          <li>每次 BeforeModel 都要重新計算「哪些要壓縮」（可 cache）</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Session 直接修改</h3>
+      <p>壓縮後直接修改 Session 中的 Events——刪除舊 events，插入 summary event</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0">
+<span style="color:#637777">/* 壓縮時 */</span>
+
+<span style="color:#addb67">Session Events</span>: [e1, e2, e3, e4, e5, ..., e20]
+  │
+<span style="color:#c792ea">Compress</span>
+  │
+  ▼
+<span style="color:#addb67">Session Events</span>: [<span style="color:#f78c6c">summary_e1_to_e10</span>, e11, ..., e20]
+<span style="color:#637777">                  ↑ 舊 events 被替換</span>
+      </div>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Session 大小受控，不會無限成長</li>
+          <li>ADK Runner 自然讀到壓縮後的歷史</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li><strong>ADK SessionService 可能不支援刪除/替換 events</strong></li>
+          <li>丟失原始對話記錄，無法回溯</li>
+          <li>需要深入了解 ADK Session 內部實作</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Custom SessionService + BeforeModel 混合</h3>
+      <p>SessionService 管理壓縮狀態，BeforeModel 做最終組裝</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0">
+<span style="color:#c792ea">ManagedSessionService</span>
+  ├─ 內部維護：summaries[] + active_events[]
+  ├─ <span style="color:#addb67">Get()</span> → 返回 [summary_events + active_events]
+  └─ <span style="color:#addb67">AppendEvent()</span> → 追蹤 + 可能觸發壓縮
+
+<span style="color:#c792ea">Plugin.BeforeModelCallback</span>
+  └─ 確保 req.Contents 使用壓縮後的 view
+      </div>
+      <div class="pros-cons" style="margin-top:10px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>最完整的控制</li>
+          <li>壓縮狀態持久化在 Session 層</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>複雜度最高——兩個元件</li>
+          <li>MVP 階段 over-engineering</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:16px;background:#1a1a2e;border-radius:8px;">
+  <h3 style="color:#c792ea;margin-top:0">為什麼推薦 A？</h3>
+  <p style="color:#e0e0e0;line-height:1.8">
+    方案 A 的核心洞察：<strong>壓縮是一個「view transformation」而非「data mutation」</strong>。
+  </p>
+  <p style="color:#e0e0e0;line-height:1.8">
+    這就像資料庫的 materialized view——原始資料完整保留，壓縮只是改變 LLM 看到的「視角」。
+    這不只是技術簡單性的考量，更是一個<strong>架構原則</strong>：
+  </p>
+  <ul style="color:#e0e0e0;line-height:1.8">
+    <li>原始對話 = source of truth（不可變）</li>
+    <li>壓縮後 context = derived view（可重算）</li>
+    <li>任何時候都可以從原始資料重新產生不同的壓縮 view</li>
+  </ul>
+</div>

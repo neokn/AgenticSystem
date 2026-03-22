@@ -1,0 +1,216 @@
+title: "S0: Model Profile Registry"
+labels: [backend, core-logic]
+depends-on: [10-project-init]
+completed-by:
+  backlog: jules
+  refined: jensen
+acceptance:
+  # Happy path: known model lookup
+  - given: Registry is initialised with built-in profiles
+    when: GetProfile("gemini-2.0-flash") is called
+    then: >
+      Returns a ModelProfile where ContextWindowTokens == 1048576,
+      MaxOutputTokens == 8192, ModelID == "gemini-2.0-flash",
+      and Provider == "google"
+
+  # Happy path: known model with compress model
+  - given: Registry is initialised with built-in profiles
+    when: GetProfile("gemini-2.5-pro") is called
+    then: >
+      Returns a ModelProfile where ContextWindowTokens == 1048576,
+      MaxOutputTokens == 65536, and CompressModelID is either empty or a
+      valid model_id string (no error returned)
+
+  # Happy path: custom profile overrides built-in
+  - given: A custom ModelProfile is provided for "gemini-2.0-flash" with ContextWindowTokens == 500000
+    when: Registry is initialised with that custom profile and GetProfile("gemini-2.0-flash") is called
+    then: Returns the custom profile with ContextWindowTokens == 500000 (custom value wins)
+
+  # Edge: unknown model_id
+  - given: Registry contains only the four built-in Gemini profiles
+    when: GetProfile("gpt-4o") is called
+    then: Returns a non-nil error with a message indicating the model_id was not found; no profile is returned
+
+  # Edge: custom profile missing required field model_id
+  - given: A custom ModelProfile is provided with an empty ModelID string
+    when: Registry is initialised with that custom profile
+    then: Initialisation returns a non-nil error; the registry is not created
+
+  # Edge: custom profile missing required field context_window_tokens
+  - given: A custom ModelProfile is provided with ModelID set but ContextWindowTokens == 0
+    when: Registry is initialised with that custom profile
+    then: Initialisation returns a non-nil error; the registry is not created
+
+  # Edge: compress_model_id absent — fallback to primary model
+  - given: A valid ModelProfile has CompressModelID == "" (empty)
+    when: A component reads CompressModelID to select the compress worker model
+    then: >
+      The compress worker falls back to the primary ModelID, and a warning
+      is emitted via the Go standard logger (log.Println / slog.Warn level)
+
+  # Edge: cost fields omitted (zero values are valid)
+  - given: A custom ModelProfile is provided with all cost fields left at their zero values (0.0)
+    when: Registry is initialised and GetProfile returns that profile
+    then: No error is returned; cost fields read back as 0.0 (zero cost is acceptable for testing/private models)
+
+architecture:
+  component: internal/memory
+  layer: Domain Layer
+  pattern: >
+    Registry — a lookup table initialized once at startup with built-in entries that
+    can be overridden by caller-supplied values. Correct choice: the Registry holds
+    static capability data with no I/O, no lifecycle, and a well-defined lookup
+    contract. It is the canonical Domain Layer pattern for this use case.
+  boundary: >
+    No ports or adapters needed. ModelProfile and Registry are pure in-process value
+    types. The Registry is constructed in main.go (or MemoryPlugin constructor) and
+    passed by dependency injection to MemoryPlugin and MemoryLayout. No interface
+    abstraction is required at MVP scale — a concrete *Registry is sufficient.
+  notes: |
+    VALUE OBJECT — ModelProfile is an immutable value object.
+    - Pass by value everywhere (the spec's Compress() signature already does this).
+    - Two profiles with identical fields are equivalent; identity comes from ModelID
+      field content, not pointer address.
+    - No setter methods. Construction only via NewRegistry (validated) or literal
+      struct init in built-in data table.
+
+    REGISTRY INJECTION — constructor injection, not global state.
+    - NewRegistry(customProfiles ...ModelProfile) (*Registry, error) is called once
+      during plugin/application startup.
+    - The returned *Registry is passed to MemoryPlugin and MemoryLayout constructors.
+    - No init() global, no sync.Once singleton. This keeps tests hermetic.
+
+    ERROR CONVENTIONS — see docs/adr/0001-error-type-conventions.md.
+    - GetProfile unknown model: sentinel var ErrModelNotFound = errors.New(...)
+      so callers can use errors.Is(err, memory.ErrModelNotFound).
+    - NewRegistry validation failures (empty ModelID, zero ContextWindowTokens):
+      plain fmt.Errorf with field-level context — these are startup mistakes,
+      no programmatic detection needed.
+    - GetEffectiveCompressModelID fallback: not an error — emit slog.Warn and
+      return the primary ModelID. No error return on this helper.
+
+    BUILT-IN DATA — declare as a package-level var (map or slice) initialized
+    via a composite literal, NOT via init(). This makes the data visible and
+    overridable in tests without init() ordering surprises.
+
+    FILE: internal/memory/profile.go
+    ADR: docs/adr/0001-error-type-conventions.md
+assignee:
+history:
+  - stage: backlog
+    at: 2026-03-22T12:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T12:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T14:00:00+08:00
+    note: Architecture review complete (jensen). Blocked on card 10 (project-init).
+description: |
+  Implement the ModelProfile struct and Registry, providing hardware specs for
+  Gemini models. All subsequent components (MemoryLayout, compress trigger,
+  cost tracking) depend on this profile.
+
+  OS equivalent: hardware detection (BIOS/UEFI hardware detection).
+
+  MVP built-in profiles:
+  - gemini-2.0-flash       (1,048,576 context, 8,192 output)
+  - gemini-2.0-flash-lite  (1,048,576 context, 8,192 output)
+  - gemini-2.5-pro         (1,048,576 context, 65,536 output)
+  - gemini-2.5-flash       (1,048,576 context, 65,536 output)
+
+  File: internal/memory/profile.go
+
+tasks:
+  # ~1h each
+  - text: >
+      Define ModelProfile struct with all fields from spec: ModelID (string),
+      Provider (string, default "google"), ContextWindowTokens (int),
+      MaxOutputTokens (int), CostPer1KInputTokens (float64),
+      CostPer1KOutputTokens (float64), CompressModelID (string),
+      CompressCostPer1KInputTokens (float64), CompressCostPer1KOutputTokens (float64)
+    done: false
+  - text: >
+      Implement Registry type, NewRegistry(customProfiles ...ModelProfile) constructor,
+      and GetProfile(modelID string) (ModelProfile, error) method
+    done: false
+  - text: >
+      Hardcode the four built-in Gemini profiles as package-level variables
+      or a map initialised in an init() function; include accurate token limits from spec
+    done: false
+  - text: >
+      Implement custom profile override logic: when a custom profile is passed to
+      NewRegistry, it replaces the built-in entry for the same ModelID
+    done: false
+  - text: >
+      Implement required-field validation in NewRegistry: reject any profile where
+      ModelID == "" or ContextWindowTokens == 0; return a descriptive error
+    done: false
+  - text: >
+      Implement CompressModelID fallback helper (GetEffectiveCompressModelID) that
+      returns CompressModelID if non-empty, else falls back to ModelID and emits a
+      slog.Warn log entry
+    done: false
+  - text: >
+      Write unit tests covering all 8 acceptance criteria above: happy paths for all
+      four built-in models, unknown model_id error, missing ModelID error, missing
+      ContextWindowTokens error, compress fallback with warning, and zero cost fields
+    done: false
+
+comments:
+  - author: jensen
+    at: 2026-03-22T14:00:00+08:00
+    text: |
+      Architecture review complete. Card stays in refined/ — blocked on card 10
+      (project-init) completing first.
+
+      Key decisions recorded:
+
+      1. REGISTRY PATTERN + DOMAIN LAYER — confirmed correct. The Registry is a
+         pure in-process lookup table with no I/O. ModelProfile is a value object:
+         immutable, passed by value, no pointer receiver needed. Both belong
+         squarely in the Domain Layer.
+
+      2. VALUE OBJECT IMMUTABILITY — ModelProfile should be treated as immutable.
+         Go enforces this by convention: pass by value (not *ModelProfile), no
+         setters, construction only through NewRegistry or validated struct
+         literals in the built-in data table. The spec's Compress() signature
+         already passes ModelProfile by value — keep this pattern throughout.
+
+      3. REGISTRY INJECTION — constructor injection only. NewRegistry returns
+         *Registry which is wired at startup (main.go or MemoryPlugin constructor)
+         and passed explicitly to dependents. No global singleton, no init()
+         side-effect. This keeps each test hermetic.
+
+      4. ERROR CONVENTIONS (cross-cutting, affects S0–S6):
+         - GetProfile unknown model: sentinel ErrModelNotFound (errors.Is-compatible).
+         - NewRegistry validation errors: plain fmt.Errorf with field context
+           (startup mistakes, callers never branch on these).
+         - GetEffectiveCompressModelID fallback: slog.Warn + return primary ModelID,
+           no error return.
+         ADR written: docs/adr/0001-error-type-conventions.md
+
+      5. BUILT-IN DATA — declare as package-level var composite literal, not init().
+         Avoids init() ordering surprises and keeps data visible in tests.
+
+      No split needed — Jules' assessment confirmed: all tasks live in one file
+      (profile.go), single component, no external I/O.
+  - author: jules
+    at: 2026-03-22T12:00:00+08:00
+    text: |
+      Refined S0 card.
+
+      Key changes vs original draft:
+      1. Acceptance criteria expanded from 3 to 8, all in Given-When-Then format.
+         Added: unknown model_id lookup (error case), missing ModelID validation,
+         missing ContextWindowTokens validation, zero-cost fields (valid edge case).
+      2. Struct fields aligned with spec: Provider field added; all nine fields from
+         the spec's Go struct are now listed explicitly in the tasks.
+      3. "Write unit tests" task was too broad — split into one task per area, each ~1h:
+         struct definition, registry constructor, built-in data, override logic,
+         validation, compress fallback helper, unit tests.
+      4. Added GetEffectiveCompressModelID helper task — this encapsulates the
+         fallback + warning behaviour described in acceptance criterion 7, so callers
+         don't inline that logic.
+      5. Splitting assessment: story is 7 tasks, all in a single file (profile.go) with
+         no external dependencies. No split needed — can be completed end-to-end in one
+         session. Strategy "Split by Capacity" or "Skeleton on Crutches" would only
+         add overhead here since all four profiles are trivial data with no external I/O.

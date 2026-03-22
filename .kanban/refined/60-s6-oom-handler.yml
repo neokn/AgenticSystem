@@ -1,0 +1,129 @@
+title: "S6: OOM Handler（Graceful Degradation）"
+labels: [backend, core-logic]
+depends-on: [40-s2s3-memory-plugin, 50-s4-compress-strategy]
+completed-by:
+  backlog: "jules"
+acceptance:
+  # --- Happy path ---
+  - given: 正常壓縮後 precise_total 仍 >= 90% context window，且 SUMMARY segment 非空
+    when: OOM handler 觸發
+    then: >
+      對現有 SUMMARY 執行二次壓縮（summary of summary），
+      壓縮完成後重新計算 precise_total；
+      assert precise_total < 90% * context_window_tokens 且
+      req.Contents 已更新為包含新摘要的版本
+
+  - given: 二次壓縮後 precise_total 仍 >= 90% context window
+    when: OOM handler 繼續執行
+    then: >
+      BeforeModelCallback 回傳 (*llm.LLMResponse, error)，
+      其中 LLMResponse.Content 包含型別為 OOMWarningEvent 的 custom event，
+      欄位包含 UsageRatio float64、Recommendation string（值為 "start a new conversation"）；
+      callback 不修改也不截斷 req.Contents
+
+  - given: 設定檔中 emergency_threshold_pct 設為 85（非預設 90）
+    when: 正常壓縮後 precise_total 為 87% context window
+    then: OOM handler 被觸發（使用自訂閾值而非預設值）
+
+  # --- Edge cases / failure scenarios ---
+  - given: SUMMARY segment 為空（對話尚未產生過任何摘要）
+    when: OOM handler 觸發，嘗試對 SUMMARY 執行二次壓縮
+    then: >
+      跳過二次壓縮步驟（無內容可壓），
+      直接進入 OOMWarning 路徑；
+      不得 panic，不得回傳 nil event
+
+  - given: 二次壓縮後 SUMMARY token 數與壓縮前相差 < 5%（壓縮已達極限）
+    when: OOM handler 評估二次壓縮結果
+    then: >
+      視為壓縮無效（maximally compressed），
+      立即跳至 OOMWarning，不再重試壓縮；
+      CompressResult.ActualCompressionRatio 被記錄至 metrics
+
+  - given: OOM handler 在任何步驟中遇到 CompressStrategy 回傳 error
+    when: 二次壓縮執行失敗
+    then: >
+      不靜默忽略 error；
+      回傳 OOMWarning event（附帶 error 訊息），
+      並在 metrics 中遞增 oom_event_count；
+      req.Contents 維持壓縮前狀態，不截斷
+
+architecture:
+  component: internal/memory
+  layer: Domain Layer
+  pattern: Chain of Responsibility
+  notes: |
+    OOM handler 作為 MemoryPlugin 中的 fallback 方法。
+    依序嘗試：二次壓縮 → OOMWarning。
+
+    OOMWarningEvent Go struct 定義建議：
+      type OOMWarningEvent struct {
+          UsageRatio     float64  // precise_total / context_window_tokens
+          Recommendation string   // "start a new conversation"
+          Reason         string   // 人類可讀說明（e.g. "secondary compression ineffective"）
+      }
+
+    ADK Go v0.6 的 BeforeModelCallback 簽名為：
+      func(ctx context.Context, req *llm.LLMRequest) (*llm.LLMResponse, error)
+    OOMWarning 透過回傳 non-nil *llm.LLMResponse（中斷模型呼叫）傳遞，
+    不透過 error 傳遞（error 保留給系統錯誤）。
+
+    Emergency threshold 90% 可配置，透過 MemoryPluginConfig 注入。
+assignee:
+history:
+  - stage: backlog
+    at: 2026-03-22T12:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T14:00:00+08:00
+description: |
+  壓縮後仍不夠空間的最後手段。
+
+  OS 等價：OOM Killer
+
+  策略（依序嘗試，每步重新檢查）：
+  1. 對 SUMMARY segment 再次壓縮（摘要的摘要）
+  2. 仍不夠 → 回傳 OOMWarning event，建議開新對話
+  3. 絕對不靜默截斷
+
+  Emergency threshold: 90%（可配置）
+
+  整合於 MemoryPlugin.BeforeModelCallback 中，
+  在正常壓縮後仍超閾值時觸發。
+
+  檔案：內嵌於 internal/memory/plugin.go 或獨立方法
+tasks:
+  - text: 定義 OOMWarningEvent struct（UsageRatio, Recommendation, Reason 欄位）
+    done: false
+  - text: 實作二次壓縮邏輯（summary of summary），含空 SUMMARY 及壓縮無效（<5% 縮減）的 guard
+    done: false
+  - text: 實作 OOMWarning 回傳：BeforeModelCallback 回傳 non-nil LLMResponse，不截斷 req.Contents
+    done: false
+  - text: Emergency threshold 90% 可配置（MemoryPluginConfig.EmergencyThresholdPct）
+    done: false
+  - text: 確保所有程式碼路徑無靜默截斷，OOM 路徑遞增 oom_event_count metric
+    done: false
+  - text: 寫測試：極小 context window 跑長對話觸發 OOM；SUMMARY 空時不 panic；壓縮失敗時仍回傳 OOMWarning
+    done: false
+comments:
+  - author: jules
+    at: 2026-03-22T14:00:00+08:00
+    text: |
+      Refinement summary:
+
+      三條原始 AC 重寫為六條可測試的 Given-When-Then：
+      - 2 條 happy path（二次壓縮成功 / OOMWarning 觸發）
+      - 1 條配置驗證（自訂 emergency threshold）
+      - 3 條 edge case：
+        (a) SUMMARY 為空時跳過壓縮直接 OOMWarning
+        (b) 壓縮已達極限（<5% 縮減）視為無效，直接 OOMWarning
+        (c) 壓縮 error 不靜默吞掉，仍須回傳 OOMWarning
+
+      補充 Go 技術決策：
+      - OOMWarningEvent 透過 non-nil *llm.LLMResponse 回傳（中斷模型呼叫），
+        而非 error，符合 ADK Go v0.6 BeforeModelCallback 語意。
+      - 壓縮 error 仍走 OOMWarning 路徑（degraded gracefully），
+        不直接 propagate error 中止整個 callback。
+
+      Story 規模評估：6 個 AC、6 個 task，所有內容集中在
+      internal/memory/plugin.go 單一元件，不需拆分。
+      直接移至 refined，Jensen 可決定是否需要架構 review。

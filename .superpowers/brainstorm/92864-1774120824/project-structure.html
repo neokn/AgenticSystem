@@ -1,0 +1,117 @@
+<h2>專案結構：C4 Level 3 Component View</h2>
+<p class="subtitle">三種 Go 專案佈局對 Memory Manager 的影響</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>標準 Go Module（可 import 的 Library）</h3>
+      <p>Memory Manager 是獨立 module，其他專案可 <code>go get</code></p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.7;color:#e0e0e0">
+<span style="color:#c792ea">agenticsystem/</span>
+├── <span style="color:#82aaff">go.mod</span>                    <span style="color:#637777"># module github.com/neokn/agenticsystem</span>
+├── <span style="color:#c792ea">cmd/</span>
+│   └── <span style="color:#c792ea">demo/</span>               <span style="color:#637777"># demo agent 驗證用</span>
+│       └── main.go
+├── <span style="color:#c792ea">pkg/</span>                      <span style="color:#637777"># 公開 API — 其他專案 import 這裡</span>
+│   ├── <span style="color:#c792ea">memorymanager/</span>       <span style="color:#637777"># 核心：Plugin + MemoryLayout</span>
+│   │   ├── plugin.go         <span style="color:#637777"># ADK Plugin 實作</span>
+│   │   ├── layout.go         <span style="color:#637777"># Segment 定義 (S1)</span>
+│   │   ├── tracker.go        <span style="color:#637777"># Token tracking (S2)</span>
+│   │   └── config.go         <span style="color:#637777"># 配置</span>
+│   ├── <span style="color:#c792ea">profile/</span>             <span style="color:#637777"># Model Profile Registry (S0)</span>
+│   ├── <span style="color:#c792ea">compress/</span>            <span style="color:#637777"># CompressStrategy interface + 實作 (S3,S4)</span>
+│   │   ├── strategy.go       <span style="color:#637777"># interface 定義</span>
+│   │   └── generational.go   <span style="color:#637777"># MVP 策略</span>
+│   ├── <span style="color:#c792ea">oom/</span>                 <span style="color:#637777"># OOM Handler (S6)</span>
+│   └── <span style="color:#c792ea">metrics/</span>             <span style="color:#637777"># Observability</span>
+└── <span style="color:#c792ea">internal/</span>                 <span style="color:#637777"># 內部實作細節</span>
+    └── testutil/
+      </div>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>可被任何 Go + ADK 專案 import</li>
+          <li>清晰的公開 API 邊界（pkg/）</li>
+          <li>符合 Go 社群慣例</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>需要仔細設計 public API surface</li>
+          <li>MVP 階段 API 可能頻繁變動</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>ADK 應用佈局（internal-first）</h3>
+      <p>以驗證為目的，核心邏輯放 <code>internal/</code>，搭配 demo agent</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.7;color:#e0e0e0">
+<span style="color:#c792ea">agenticsystem/</span>
+├── <span style="color:#82aaff">go.mod</span>
+├── <span style="color:#c792ea">cmd/</span>
+│   └── <span style="color:#c792ea">agent/</span>              <span style="color:#637777"># 主程式：ADK Runner + demo agent</span>
+│       └── main.go
+├── <span style="color:#c792ea">internal/</span>                 <span style="color:#637777"># 全部在 internal — 不承諾公開 API</span>
+│   ├── <span style="color:#c792ea">memory/</span>              <span style="color:#637777"># Memory Manager 核心</span>
+│   │   ├── plugin.go
+│   │   ├── layout.go
+│   │   └── tracker.go
+│   ├── <span style="color:#c792ea">profile/</span>
+│   ├── <span style="color:#c792ea">compress/</span>
+│   │   ├── strategy.go
+│   │   └── generational.go
+│   ├── <span style="color:#c792ea">oom/</span>
+│   └── <span style="color:#c792ea">metrics/</span>
+└── <span style="color:#c792ea">configs/</span>                  <span style="color:#637777"># Model profiles JSON, 預設配置</span>
+      </div>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>API 可以自由變動，不怕 breaking change</li>
+          <li>聚焦驗證核心邏輯，不用思考 public surface</li>
+          <li>MVP 最快交付</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>其他專案無法 import</li>
+          <li>之後要公開需搬動程式碼</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>混合：internal 開發 → 穩定後 promote 到 pkg</h3>
+      <p>先 internal-first，interface 穩定後再搬到 pkg/ 公開</p>
+      <div style="background:#1a1a2e;padding:14px;border-radius:6px;margin-top:8px;font-family:monospace;font-size:12px;line-height:1.7;color:#e0e0e0">
+<span style="color:#637777"># Phase 1 (MVP): 全部在 internal/</span>
+<span style="color:#637777"># Phase 2 (穩定後): 把 interface + config 搬到 pkg/</span>
+<span style="color:#637777">#   pkg/memorymanager/  ← public API (Plugin, Config, Strategy interface)</span>
+<span style="color:#637777">#   internal/compress/  ← 策略實作仍為 internal</span>
+      </div>
+      <div class="pros-cons" style="margin-top:8px">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>MVP 速度 = B，未來潛力 = A</li>
+          <li>自然的演進路徑</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>需要紀律——知道何時 promote</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;padding:16px;background:#0d1b2a;border-radius:8px;border:1px solid #1b2838">
+  <h3 style="color:#7fdbca;margin-top:0">📐 Component Dependency（所有方案共用）</h3>
+  <div style="font-family:monospace;font-size:13px;line-height:2;color:#e0e0e0;padding:8px">
+    <span style="color:#addb67">profile</span> ← <span style="color:#c792ea">memory (plugin + layout)</span> → <span style="color:#addb67">compress</span><br>
+    <span style="color:#c792ea">memory</span> → <span style="color:#addb67">metrics</span><br>
+    <span style="color:#c792ea">memory</span> → <span style="color:#addb67">oom</span><br>
+    <span style="color:#addb67">compress</span> → <span style="color:#addb67">profile</span> <span style="color:#637777">(compress worker 需要知道模型)</span><br>
+    <span style="color:#637777">依賴方向：memory(核心) → profile, compress, metrics, oom</span><br>
+    <span style="color:#637777">無環狀依賴 ✓</span>
+  </div>
+</div>

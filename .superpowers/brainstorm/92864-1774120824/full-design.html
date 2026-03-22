@@ -1,0 +1,163 @@
+<h2>MVP 設計：Context Window Memory Manager</h2>
+<p class="subtitle">Section 1 — System Context + Component Architecture</p>
+
+<!-- C4 Level 1: System Context -->
+<div class="section" style="padding:20px;background:#0d1b2a;border-radius:8px;border:1px solid #1b2838;margin-bottom:24px">
+  <h3 style="color:#7fdbca;margin-top:0">C4 Level 1：System Context</h3>
+  <div style="font-family:monospace;font-size:13px;line-height:2.2;color:#e0e0e0;text-align:center;padding:16px">
+    <div style="display:flex;justify-content:center;gap:40px;flex-wrap:wrap;align-items:center">
+      <div style="border:2px solid #546e7a;border-radius:8px;padding:16px 24px;min-width:140px">
+        <div style="color:#82aaff;font-weight:bold">Developer</div>
+        <div style="color:#637777;font-size:11px">使用者</div>
+      </div>
+      <div style="color:#637777;font-size:20px">→</div>
+      <div style="border:2px solid #c792ea;border-radius:8px;padding:16px 24px;background:#1a1a3e;min-width:200px">
+        <div style="color:#c792ea;font-weight:bold">AgenticSystem</div>
+        <div style="color:#addb67;font-size:11px">Context Window Memory Manager</div>
+        <div style="color:#637777;font-size:11px">Go + ADK Go Plugin</div>
+      </div>
+      <div style="color:#637777;font-size:20px">→</div>
+      <div style="border:2px solid #546e7a;border-radius:8px;padding:16px 24px;min-width:140px">
+        <div style="color:#82aaff;font-weight:bold">Gemini API</div>
+        <div style="color:#637777;font-size:11px">LLM Provider</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- C4 Level 3: Component -->
+<div class="section" style="padding:20px;background:#0d1b2a;border-radius:8px;border:1px solid #1b2838;margin-bottom:24px">
+  <h3 style="color:#7fdbca;margin-top:0">C4 Level 3：Component Diagram</h3>
+  <div style="font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0;padding:12px">
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <!-- Left: ADK 元件 -->
+  <div>
+    <div style="color:#82aaff;font-weight:bold;margin-bottom:8px;font-size:13px">ADK 框架元件</div>
+    <div style="border:1px solid #546e7a;border-radius:6px;padding:12px;margin-bottom:8px">
+      <span style="color:#addb67">Runner</span><br>
+      <span style="color:#637777">執行引擎，串接 Agent + Session + Plugin</span>
+    </div>
+    <div style="border:1px solid #546e7a;border-radius:6px;padding:12px;margin-bottom:8px">
+      <span style="color:#addb67">LLMAgent</span><br>
+      <span style="color:#637777">主對話 Agent（Gemini model）</span>
+    </div>
+    <div style="border:1px solid #546e7a;border-radius:6px;padding:12px">
+      <span style="color:#addb67">Compress Agent</span><br>
+      <span style="color:#637777">獨立 LLMAgent，用較便宜模型做壓縮</span><br>
+      <span style="color:#637777">有自己的 Runner（隔離 context window）</span>
+    </div>
+  </div>
+
+  <!-- Right: 自研元件 -->
+  <div>
+    <div style="color:#c792ea;font-weight:bold;margin-bottom:8px;font-size:13px">自研元件（Memory Manager）</div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;margin-bottom:8px;background:#1a1a3e">
+      <span style="color:#c792ea">MemoryPlugin</span> <span style="color:#637777">(plugin.Plugin)</span><br>
+      <span style="color:#637777">感測層：token tracking, trigger, BeforeModel 組裝</span>
+    </div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;margin-bottom:8px;background:#1a1a3e">
+      <span style="color:#c792ea">ManagedSessionService</span> <span style="color:#637777">(session.Service)</span><br>
+      <span style="color:#637777">執行層：壓縮狀態、歷史管理、CompressStrategy 調度</span>
+    </div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;margin-bottom:8px;background:#1a1a3e">
+      <span style="color:#c792ea">ModelProfileRegistry</span><br>
+      <span style="color:#637777">Model specs + cost info（S0）</span>
+    </div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;margin-bottom:8px;background:#1a1a3e">
+      <span style="color:#c792ea">MemoryLayout</span><br>
+      <span style="color:#637777">Segment 定義 + 動態 rebalance（S1）</span>
+    </div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;margin-bottom:8px;background:#1a1a3e">
+      <span style="color:#c792ea">CompressStrategy</span> <span style="color:#637777">(interface)</span><br>
+      <span style="color:#637777">可插拔壓縮策略 + Generational 實作（S4）</span>
+    </div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;margin-bottom:8px;background:#1a1a3e">
+      <span style="color:#c792ea">OOMHandler</span><br>
+      <span style="color:#637777">Graceful degradation（S6）</span>
+    </div>
+    <div style="border:1px solid #c792ea;border-radius:6px;padding:12px;background:#1a1a3e">
+      <span style="color:#c792ea">MetricsCollector</span><br>
+      <span style="color:#637777">Observability（所有 metrics）</span>
+    </div>
+  </div>
+</div>
+
+  </div>
+</div>
+
+<!-- 資料流 -->
+<div class="section" style="padding:20px;background:#0d1b2a;border-radius:8px;border:1px solid #1b2838;margin-bottom:24px">
+  <h3 style="color:#7fdbca;margin-top:0">核心資料流（每輪對話）</h3>
+  <div style="font-family:monospace;font-size:12px;line-height:2;color:#e0e0e0;padding:8px">
+<span style="color:#82aaff">1.</span> User message 進入 Runner
+<span style="color:#82aaff">2.</span> Runner 調用 <span style="color:#c792ea">ManagedSessionService.Get()</span>
+    → 返回 [summary_events + active_events]（壓縮後的 view）
+<span style="color:#82aaff">3.</span> Runner 組裝 LLMRequest（system prompt + session events + user msg）
+<span style="color:#82aaff">4.</span> <span style="color:#c792ea">MemoryPlugin.BeforeModelCallback</span> 攔截
+    ├─ 從 req 讀取 content 大小（粗估）
+    ├─ 判斷 memory pressure（S3）
+    ├─ 如需壓縮 → 通知 ManagedSessionService 執行壓縮
+    │   └─ ManagedSessionService 用 <span style="color:#addb67">Compress Agent</span> 執行（獨立 Runner）
+    │   └─ 更新內部 summaries + active_events
+    └─ 確保 req.Contents 反映最新的壓縮 view
+<span style="color:#82aaff">5.</span> LLM API call（Gemini）
+<span style="color:#82aaff">6.</span> <span style="color:#c792ea">MemoryPlugin.AfterModelCallback</span> 攔截
+    ├─ 讀取 resp.UsageMetadata（精確 token 計數）
+    ├─ 更新 MemoryLayout 的 usage 數據
+    ├─ 首輪校正 PINNED segment（S2）
+    └─ 記錄 metrics
+<span style="color:#82aaff">7.</span> Runner 自動 append event 到 Session
+    → <span style="color:#c792ea">ManagedSessionService</span> 攔截 append，更新 active_events 追蹤
+  </div>
+</div>
+
+<!-- 專案結構 -->
+<div class="section" style="padding:20px;background:#0d1b2a;border-radius:8px;border:1px solid #1b2838">
+  <h3 style="color:#7fdbca;margin-top:0">專案目錄結構</h3>
+  <div style="font-family:monospace;font-size:12px;line-height:1.8;color:#e0e0e0;padding:8px">
+<span style="color:#c792ea">agenticsystem/</span>
+├── <span style="color:#82aaff">go.mod</span>                         <span style="color:#637777"># module github.com/neokn/agenticsystem</span>
+├── <span style="color:#82aaff">go.sum</span>
+├── <span style="color:#c792ea">cmd/</span>
+│   └── <span style="color:#c792ea">agent/</span>
+│       └── <span style="color:#addb67">main.go</span>              <span style="color:#637777"># Demo: ADK Runner + MemoryPlugin + demo agent</span>
+├── <span style="color:#c792ea">internal/</span>
+│   ├── <span style="color:#c792ea">profile/</span>                  <span style="color:#637777"># S0: Model Profile Registry</span>
+│   │   ├── <span style="color:#addb67">registry.go</span>          <span style="color:#637777"># ModelProfile struct + Registry</span>
+│   │   ├── <span style="color:#addb67">defaults.go</span>          <span style="color:#637777"># Gemini 內建 profiles</span>
+│   │   └── <span style="color:#addb67">registry_test.go</span>
+│   ├── <span style="color:#c792ea">layout/</span>                   <span style="color:#637777"># S1: Memory Layout</span>
+│   │   ├── <span style="color:#addb67">layout.go</span>            <span style="color:#637777"># Segment 定義 + 初始化 + rebalance</span>
+│   │   ├── <span style="color:#addb67">config.go</span>            <span style="color:#637777"># LayoutConfig（配比、閾值）</span>
+│   │   └── <span style="color:#addb67">layout_test.go</span>
+│   ├── <span style="color:#c792ea">tracker/</span>                  <span style="color:#637777"># S2: Token Tracking</span>
+│   │   ├── <span style="color:#addb67">tracker.go</span>           <span style="color:#637777"># UsageMetadata 讀取 + 累計 + 校正</span>
+│   │   └── <span style="color:#addb67">tracker_test.go</span>
+│   ├── <span style="color:#c792ea">trigger/</span>                  <span style="color:#637777"># S3: Compress Trigger</span>
+│   │   ├── <span style="color:#addb67">trigger.go</span>           <span style="color:#637777"># Pressure detection + rolling avg</span>
+│   │   └── <span style="color:#addb67">trigger_test.go</span>
+│   ├── <span style="color:#c792ea">compress/</span>                 <span style="color:#637777"># S4: Compress Strategy</span>
+│   │   ├── <span style="color:#addb67">strategy.go</span>          <span style="color:#637777"># CompressStrategy interface</span>
+│   │   ├── <span style="color:#addb67">generational.go</span>      <span style="color:#637777"># Generational 策略實作</span>
+│   │   ├── <span style="color:#addb67">result.go</span>            <span style="color:#637777"># CompressResult struct</span>
+│   │   ├── <span style="color:#addb67">worker.go</span>            <span style="color:#637777"># Compress Worker（獨立 ADK Runner）</span>
+│   │   └── <span style="color:#addb67">compress_test.go</span>
+│   ├── <span style="color:#c792ea">oom/</span>                      <span style="color:#637777"># S6: OOM Handler</span>
+│   │   ├── <span style="color:#addb67">handler.go</span>           <span style="color:#637777"># Escalation 策略</span>
+│   │   └── <span style="color:#addb67">handler_test.go</span>
+│   ├── <span style="color:#c792ea">metrics/</span>                  <span style="color:#637777"># Observability</span>
+│   │   ├── <span style="color:#addb67">collector.go</span>         <span style="color:#637777"># MetricsCollector</span>
+│   │   └── <span style="color:#addb67">report.go</span>            <span style="color:#637777"># Report 輸出格式</span>
+│   ├── <span style="color:#c792ea">plugin/</span>                   <span style="color:#637777"># ADK Plugin 整合層</span>
+│   │   ├── <span style="color:#addb67">memory_plugin.go</span>     <span style="color:#637777"># MemoryPlugin（感測層）</span>
+│   │   └── <span style="color:#addb67">plugin_test.go</span>
+│   └── <span style="color:#c792ea">session/</span>                  <span style="color:#637777"># ADK SessionService Wrapper</span>
+│       ├── <span style="color:#addb67">managed_session.go</span>   <span style="color:#637777"># ManagedSessionService（執行層）</span>
+│       └── <span style="color:#addb67">managed_session_test.go</span>
+├── <span style="color:#c792ea">configs/</span>
+│   └── <span style="color:#addb67">default.json</span>             <span style="color:#637777"># 預設配置（segment 配比、閾值等）</span>
+└── <span style="color:#c792ea">docs/</span>
+    └── <span style="color:#c792ea">adr/</span>                     <span style="color:#637777"># Architecture Decision Records</span>
+  </div>
+</div>

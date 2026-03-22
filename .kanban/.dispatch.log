@@ -1,0 +1,35 @@
+[2026-03-22T11:32:56+08:00] → jules: .kanban/backlog/10-project-init.yml (backlog)
+zsh:1: no matches found: .kanban/backlog/10-project-init[jules].yml
+zsh:1: no matches found: .kanban/backlog/10-project-init[jules].yml
+zsh:1: no matches found: .kanban/backlog/10-project-init[jules].yml
+zsh:1: no matches found: .kanban/backlog/10-project-init[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-s0-model-profile[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-s0-model-profile[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-s0-model-profile[jules].yml
+zsh:1: no matches found: .kanban/backlog/20-s0-model-profile[jules].yml
+zsh:1: no matches found: .kanban/backlog/50-s4-compress-strategy[jules].yml
+zsh:1: no matches found: .kanban/backlog/50-s4-compress-strategy[jules].yml
+zsh:1: no matches found: .kanban/backlog/50-s4-compress-strategy[jules].yml
+zsh:1: no matches found: .kanban/backlog/50-s4-compress-strategy[jules].yml
+zsh:1: no matches found: .kanban/backlog/60-s6-oom-handler[jules].yml
+zsh:1: no matches found: .kanban/backlog/60-s6-oom-handler[jules].yml
+zsh:1: no matches found: .kanban/backlog/30-s1-memory-layout[jules].yml
+zsh:1: no matches found: .kanban/backlog/30-s1-memory-layout[jules].yml
+zsh:1: no matches found: .kanban/backlog/60-s6-oom-handler[jules].yml
+zsh:1: no matches found: .kanban/backlog/60-s6-oom-handler[jules].yml
+zsh:1: no matches found: .kanban/backlog/70-demo-agent[jules].yml
+zsh:1: no matches found: .kanban/backlog/70-demo-agent[jules].yml
+zsh:1: no matches found: .kanban/backlog/70-demo-agent[jules].yml
+zsh:1: no matches found: .kanban/backlog/70-demo-agent[jules].yml
+zsh:1: no matches found: .kanban/backlog/40-s2s3-memory-plugin[jules].yml
+zsh:1: no matches found: .kanban/backlog/40-s2s3-memory-plugin[jules].yml
+zsh:1: no matches found: .kanban/backlog/40-s2s3-memory-plugin[jules].yml
+zsh:1: no matches found: .kanban/backlog/40-s2s3-memory-plugin[jules].yml
+[2026-03-22T11:39:10+08:00] → james: .kanban/refined/20-s0-model-profile.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/james: No such file or directory
+[2026-03-22T11:39:14+08:00] → james: .kanban/refined/20-s0-model-profile.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/james: No such file or directory
+[2026-03-22T11:39:19+08:00] → james: .kanban/refined/20-s0-model-profile.yml (refined)
+.kanban/.dispatch.sh: line 62: .kanban/.pipes/james: No such file or directory
+zsh:1: no matches found: .kanban/refined/10-project-init[jensen].yml
+zsh:1: no matches found: .kanban/refined/10-project-init[jensen].yml

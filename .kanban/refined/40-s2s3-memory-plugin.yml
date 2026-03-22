@@ -1,0 +1,161 @@
+title: "S2+S3: MemoryPlugin (Token Tracking + Compress Trigger)"
+labels: [backend, core-logic]
+depends-on: [30-s1-memory-layout]
+completed-by:
+  backlog: jules
+acceptance:
+  # --- Happy path: AfterModelCallback stores usage ---
+  - given: a model turn completes and resp.UsageMetadata.TotalTokenCount is available
+    when: AfterModelCallback is invoked
+    then: plugin.lastTotalTokens is set to resp.UsageMetadata.TotalTokenCount (verified by reading the field or via a subsequent estimation)
+
+  # --- Happy path: first turn (no prior usage) ---
+  - given: plugin.lastTotalTokens is 0 (first turn, no prior AfterModelCallback has run)
+    when: BeforeModelCallback is invoked with a new user message
+    then: estimated_total = 0 + tokenizer(msg) + max_output_tokens; if estimated_total < threshold the request passes through without calling countTokens API
+
+  # --- Happy path: short conversation, well below threshold ---
+  - given: last_total_tokens + tokenizer(new_msg) + max_output_tokens < 80% of context_window_tokens
+    when: BeforeModelCallback is invoked
+    then: the request passes through unmodified and countTokens API is never called
+
+  # --- Happy path: offline estimate triggers API, API confirms, compression fires ---
+  - given: last_total_tokens + tokenizer(new_msg) + max_output_tokens >= 80% of context_window_tokens
+    when: countTokens API returns a precise_total also >= 80% of context_window_tokens
+    then: CompressStrategy.SelectCandidates and Compress are called; req.Contents is rewritten to [system_prompt + summary + recent_active_turns + user_msg]; plugin.summaries and plugin.compressedUpToIndex are updated
+
+  # --- Edge case: false alarm (offline over-estimates) ---
+  - given: offline estimated_total >= 80% threshold triggers countTokens API call
+    when: the precise_total returned by countTokens API is < 80% of context_window_tokens
+    then: request passes through unmodified (no compression); countTokens API call count metric is incremented, compress_trigger_count is not
+
+  # --- Edge case: AfterModelCallback with nil or missing UsageMetadata ---
+  - given: a model response arrives with nil UsageMetadata or TotalTokenCount == 0
+    when: AfterModelCallback is invoked
+    then: lastTotalTokens retains its previous value (no overwrite with zero); a warning is logged
+
+  # --- Edge case: concurrent safety ---
+  - given: two goroutines invoke BeforeModelCallback simultaneously on the same MemoryPlugin instance
+    when: both read lastTotalTokens and one updates compressedUpToIndex
+    then: no data race is detected (go test -race passes); each callback observes a consistent snapshot of plugin state
+
+  # --- Edge case: configurable threshold ---
+  - given: MemoryPlugin is initialized with a custom threshold of 70%
+    when: estimated_total reaches 70% of context_window_tokens
+    then: the 70% threshold is used for both offline and precise-total comparisons; the 80% default is not applied
+
+architecture:
+  component: internal/memory
+  layer: Application Layer
+  pattern: Plugin (ADK plugin.Plugin)
+  notes: |
+    MemoryPlugin implements the ADK plugin.Plugin interface.
+    BeforeModelCallback: two-layer estimation + compress trigger + req.Contents rewrite.
+    AfterModelCallback: stores last_total_tokens (single integer).
+    Internal state: lastTotalTokens int, summaries []string, compressedUpToIndex int.
+    Compression is a view transformation — Session history is never mutated.
+    Threshold (default 80%) is configurable at initialization.
+    All state mutations on lastTotalTokens, summaries, compressedUpToIndex must be
+    protected with a sync.Mutex to allow safe use in concurrent ADK runners.
+assignee:
+history:
+  - stage: backlog
+    at: 2026-03-22T12:00:00+08:00
+  - stage: refined
+    at: 2026-03-22T12:00:00+08:00
+description: |
+  Implement the ADK MemoryPlugin in internal/memory/plugin.go. This is the central
+  orchestrator for the context window memory manager. It has two responsibilities:
+
+  1. AfterModelCallback — store resp.UsageMetadata.TotalTokenCount as lastTotalTokens.
+     This single integer is the baseline for the next turn's estimation.
+
+  2. BeforeModelCallback — two-layer token estimation and compression trigger:
+     - Offline (cheap): estimated = lastTotalTokens + genai/tokenizer.CountTokens(new_msg) + max_output_tokens
+     - If estimated < threshold: pass through (never call countTokens API)
+     - If estimated >= threshold: call countTokens API for precise_total
+       - If precise_total < threshold: pass through (false alarm, log it)
+       - If precise_total >= threshold: trigger compression
+
+  Compression trigger:
+  - Call CompressStrategy.SelectCandidates(activeTurns, targetReclaimTokens)
+  - Call CompressStrategy.Compress(candidates, existingSummary, profile)
+  - Rewrite req.Contents: [system_prompt + summary + recent_active_turns + user_msg]
+  - Update plugin.summaries and plugin.compressedUpToIndex
+
+  Design decisions:
+  - Threshold default 80%, configurable at initialization
+  - Offline estimator is intentionally conservative (over-triggers API rather than misses)
+  - Session history is never mutated (req.Contents rewrite is a view transformation)
+  - lastTotalTokens starts at 0 on first turn; formula still works correctly
+  - All internal state protected by sync.Mutex for goroutine safety
+
+  Metrics emitted (into MemoryMetrics struct):
+  - lastTotalTokens (gauge)
+  - usageRatio (gauge: lastTotalTokens / context_window_tokens)
+  - countTokensAPICallCount (counter)
+  - compressTriggerCount (counter)
+  - compressReclaimedTokens (histogram entry per compression event)
+
+  File: internal/memory/plugin.go
+tasks:
+  - text: "Define MemoryPlugin struct: fields lastTotalTokens int, summaries []string, compressedUpToIndex int, mu sync.Mutex, threshold float64, profile ModelProfile, layout MemoryLayout, strategy CompressStrategy, metrics *MemoryMetrics"
+    done: false
+  - text: "Implement plugin.Plugin interface registration (Name() and the two callback hooks)"
+    done: false
+  - text: "Implement AfterModelCallback: lock mu, read resp.UsageMetadata.TotalTokenCount, update lastTotalTokens only if value > 0 (guard nil/zero), unlock"
+    done: false
+  - text: "Implement offline estimator helper: estimatedTotal(msgTokens int) int — returns lastTotalTokens + msgTokens + profile.MaxOutputTokens"
+    done: false
+  - text: "Implement BeforeModelCallback first layer: call genai/tokenizer.CountTokens(new_user_msg); if estimatedTotal < threshold*contextWindow, return nil (pass through)"
+    done: false
+  - text: "Implement BeforeModelCallback second layer: call countTokens API; increment countTokensAPICallCount metric; if precise_total < threshold, return nil (false alarm path)"
+    done: false
+  - text: "Implement compression trigger: call strategy.SelectCandidates + strategy.Compress; rewrite req.Contents with [system_prompt + summary + active_turns + user_msg]; update summaries and compressedUpToIndex under mu; increment compressTriggerCount and record reclaimedTokens"
+    done: false
+  - text: "Implement threshold configuration: accept threshold float64 in MemoryPlugin constructor; validate 0 < threshold < 1.0; default to 0.80"
+    done: false
+  - text: "Implement MemoryMetrics struct (lastTotalTokens, usageRatio, countTokensAPICallCount, compressTriggerCount, compressReclaimedTokens []int) with an accessor method GetSnapshot() MemoryMetrics"
+    done: false
+  - text: "Write unit tests (go test -race): first-turn (lastTotalTokens==0) estimation; short conversation never calls countTokens; offline over-threshold triggers API; false alarm pass-through; precise over-threshold fires compression and rewrites req.Contents; nil UsageMetadata guard; custom threshold respected"
+    done: false
+comments:
+  - author: jules
+    at: 2026-03-22T12:00:00+08:00
+    text: |
+      Refinement notes for card 40-s2s3-memory-plugin:
+
+      SPLITTING DECISION: Not split. Although the card has 10 tasks, all tasks form
+      a single inseparable deployable unit — AfterModel and BeforeModel must both work
+      for the plugin to deliver any value. CompressStrategy (S4) is already a separate
+      card. The depends-on relationship handles the build order.
+
+      ACCEPTANCE CRITERIA ADDITIONS:
+      1. First-turn edge case: lastTotalTokens starts at 0; the offline estimator must
+         handle this correctly (estimated = 0 + tokenizer(msg) + max_output_tokens).
+         This is safe by design but must be explicitly tested.
+
+      2. Nil/zero UsageMetadata guard: AfterModelCallback must not overwrite
+         lastTotalTokens with 0 when the API returns missing metadata — the previous
+         value is more useful than zero for the next estimation.
+
+      3. Race condition / goroutine safety: sync.Mutex is required on all reads and
+         writes to lastTotalTokens, summaries, compressedUpToIndex. Test with
+         go test -race.
+
+      4. Configurable threshold: the 80% default must be a constructor parameter
+         with validation, not a hardcoded constant.
+
+      TASK ADDITIONS vs original card:
+      - Added sync.Mutex to the struct definition task
+      - Split the BeforeModelCallback into two explicit tasks (offline layer,
+        online layer) with their respective pass-through conditions
+      - Added MemoryMetrics struct as an explicit task (spec section: Observability)
+      - Explicitly required go test -race in the test task
+
+      NOTE FOR JENSEN: No architecture review required. The spec is clear on the
+      component boundary. CompressStrategy is injected via constructor (DI), making
+      this unit-testable with a stub. The countTokens API call should use the same
+      genai.Client already held by the main Runner — confirm the ADK v0.6 Plugin
+      interface gives access to the client in BeforeModelCallback context, or whether
+      a separate client reference must be stored in the plugin struct.
