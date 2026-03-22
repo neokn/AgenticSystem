@@ -4,68 +4,55 @@ depends-on: [10-project-init]
 completed-by:
   backlog: jules
   refined: jensen
+  in-progress: james
 acceptance:
   # Happy path: known model lookup
   - given: Registry is initialised with built-in profiles
     when: GetProfile("gemini-2.0-flash") is called
     then: >
-      Returns a ModelProfile where ContextWindowTokens == 1048576,
-      MaxOutputTokens == 8192, ModelID == "gemini-2.0-flash",
-      and Provider == "google"
+      Returns a ModelProfile where ContextWindowTokens == 1048576, MaxOutputTokens == 8192, ModelID == "gemini-2.0-flash", and Provider == "google"
 
   # Happy path: known model with compress model
   - given: Registry is initialised with built-in profiles
     when: GetProfile("gemini-2.5-pro") is called
     then: >
-      Returns a ModelProfile where ContextWindowTokens == 1048576,
-      MaxOutputTokens == 65536, and CompressModelID is either empty or a
-      valid model_id string (no error returned)
+      Returns a ModelProfile where ContextWindowTokens == 1048576, MaxOutputTokens == 65536, and CompressModelID is either empty or a valid model_id string (no error returned)
 
   # Happy path: custom profile overrides built-in
   - given: A custom ModelProfile is provided for "gemini-2.0-flash" with ContextWindowTokens == 500000
     when: Registry is initialised with that custom profile and GetProfile("gemini-2.0-flash") is called
     then: Returns the custom profile with ContextWindowTokens == 500000 (custom value wins)
-
   # Edge: unknown model_id
   - given: Registry contains only the four built-in Gemini profiles
     when: GetProfile("gpt-4o") is called
     then: Returns a non-nil error with a message indicating the model_id was not found; no profile is returned
-
   # Edge: custom profile missing required field model_id
   - given: A custom ModelProfile is provided with an empty ModelID string
     when: Registry is initialised with that custom profile
     then: Initialisation returns a non-nil error; the registry is not created
-
   # Edge: custom profile missing required field context_window_tokens
   - given: A custom ModelProfile is provided with ModelID set but ContextWindowTokens == 0
     when: Registry is initialised with that custom profile
     then: Initialisation returns a non-nil error; the registry is not created
-
   # Edge: compress_model_id absent — fallback to primary model
   - given: A valid ModelProfile has CompressModelID == "" (empty)
     when: A component reads CompressModelID to select the compress worker model
     then: >
-      The compress worker falls back to the primary ModelID, and a warning
-      is emitted via the Go standard logger (log.Println / slog.Warn level)
+      The compress worker falls back to the primary ModelID, and a warning is emitted via the Go standard logger (log.Println / slog.Warn level)
 
   # Edge: cost fields omitted (zero values are valid)
   - given: A custom ModelProfile is provided with all cost fields left at their zero values (0.0)
     when: Registry is initialised and GetProfile returns that profile
     then: No error is returned; cost fields read back as 0.0 (zero cost is acceptable for testing/private models)
-
 architecture:
   component: internal/memory
   layer: Domain Layer
   pattern: >
-    Registry — a lookup table initialized once at startup with built-in entries that
-    can be overridden by caller-supplied values. Correct choice: the Registry holds
-    static capability data with no I/O, no lifecycle, and a well-defined lookup
-    contract. It is the canonical Domain Layer pattern for this use case.
+    Registry — a lookup table initialized once at startup with built-in entries that can be overridden by caller-supplied values. Correct choice: the Registry holds static capability data with no I/O, no lifecycle, and a well-defined lookup contract. It is the canonical Domain Layer pattern for this use case.
+
   boundary: >
-    No ports or adapters needed. ModelProfile and Registry are pure in-process value
-    types. The Registry is constructed in main.go (or MemoryPlugin constructor) and
-    passed by dependency injection to MemoryPlugin and MemoryLayout. No interface
-    abstraction is required at MVP scale — a concrete *Registry is sufficient.
+    No ports or adapters needed. ModelProfile and Registry are pure in-process value types. The Registry is constructed in main.go (or MemoryPlugin constructor) and passed by dependency injection to MemoryPlugin and MemoryLayout. No interface abstraction is required at MVP scale — a concrete *Registry is sufficient.
+
   notes: |
     VALUE OBJECT — ModelProfile is an immutable value object.
     - Pass by value everywhere (the spec's Compress() signature already does this).
@@ -104,6 +91,9 @@ history:
   - stage: refined
     at: 2026-03-22T14:00:00+08:00
     note: Architecture review complete (jensen). Blocked on card 10 (project-init).
+  - stage: testing
+    at: "2026-03-22T11:50:00+08:00"
+    note: Implementation complete by james. 19 tests passing.
 description: |
   Implement the ModelProfile struct and Registry, providing hardware specs for
   Gemini models. All subsequent components (MemoryLayout, compress trigger,
@@ -118,43 +108,36 @@ description: |
   - gemini-2.5-flash       (1,048,576 context, 65,536 output)
 
   File: internal/memory/profile.go
-
 tasks:
   # ~1h each
   - text: >
-      Define ModelProfile struct with all fields from spec: ModelID (string),
-      Provider (string, default "google"), ContextWindowTokens (int),
-      MaxOutputTokens (int), CostPer1KInputTokens (float64),
-      CostPer1KOutputTokens (float64), CompressModelID (string),
-      CompressCostPer1KInputTokens (float64), CompressCostPer1KOutputTokens (float64)
-    done: false
-  - text: >
-      Implement Registry type, NewRegistry(customProfiles ...ModelProfile) constructor,
-      and GetProfile(modelID string) (ModelProfile, error) method
-    done: false
-  - text: >
-      Hardcode the four built-in Gemini profiles as package-level variables
-      or a map initialised in an init() function; include accurate token limits from spec
-    done: false
-  - text: >
-      Implement custom profile override logic: when a custom profile is passed to
-      NewRegistry, it replaces the built-in entry for the same ModelID
-    done: false
-  - text: >
-      Implement required-field validation in NewRegistry: reject any profile where
-      ModelID == "" or ContextWindowTokens == 0; return a descriptive error
-    done: false
-  - text: >
-      Implement CompressModelID fallback helper (GetEffectiveCompressModelID) that
-      returns CompressModelID if non-empty, else falls back to ModelID and emits a
-      slog.Warn log entry
-    done: false
-  - text: >
-      Write unit tests covering all 8 acceptance criteria above: happy paths for all
-      four built-in models, unknown model_id error, missing ModelID error, missing
-      ContextWindowTokens error, compress fallback with warning, and zero cost fields
-    done: false
+      Define ModelProfile struct with all fields from spec: ModelID (string), Provider (string, default "google"), ContextWindowTokens (int), MaxOutputTokens (int), CostPer1KInputTokens (float64), CostPer1KOutputTokens (float64), CompressModelID (string), CompressCostPer1KInputTokens (float64), CompressCostPer1KOutputTokens (float64)
 
+    done: true
+  - text: >
+      Implement Registry type, NewRegistry(customProfiles ...ModelProfile) constructor, and GetProfile(modelID string) (ModelProfile, error) method
+
+    done: true
+  - text: >
+      Hardcode the four built-in Gemini profiles as package-level variables or a map initialised in an init() function; include accurate token limits from spec
+
+    done: true
+  - text: >
+      Implement custom profile override logic: when a custom profile is passed to NewRegistry, it replaces the built-in entry for the same ModelID
+
+    done: true
+  - text: >
+      Implement required-field validation in NewRegistry: reject any profile where ModelID == "" or ContextWindowTokens == 0; return a descriptive error
+
+    done: true
+  - text: >
+      Implement CompressModelID fallback helper (GetEffectiveCompressModelID) that returns CompressModelID if non-empty, else falls back to ModelID and emits a slog.Warn log entry
+
+    done: true
+  - text: >
+      Write unit tests covering all 8 acceptance criteria above: happy paths for all four built-in models, unknown model_id error, missing ModelID error, missing ContextWindowTokens error, compress fallback with warning, and zero cost fields
+
+    done: true
 comments:
   - author: jensen
     at: 2026-03-22T14:00:00+08:00
@@ -214,3 +197,30 @@ comments:
          no external dependencies. No split needed — can be completed end-to-end in one
          session. Strategy "Split by Capacity" or "Skeleton on Crutches" would only
          add overhead here since all four profiles are trivial data with no external I/O.
+  - author: james
+    at: "2026-03-22T11:50:00+08:00"
+    text: |-
+      Implementation complete. TDD Red-Green-Refactor applied task by task.
+
+      Files created:
+      - /Users/neokn/GitHub/AgenticSystem/internal/memory/profile.go
+      - /Users/neokn/GitHub/AgenticSystem/internal/memory/profile_test.go
+
+      Patterns applied:
+      - VALUE OBJECT: ModelProfile passed by value, no setters, no *ModelProfile pointers
+      - REGISTRY: NewRegistry constructor injection, no global state, no init()
+      - SENTINEL ERROR: ErrModelNotFound for GetProfile, fmt.Errorf for validation (ADR-0001)
+
+      Built-in profiles: gemini-2.0-flash, gemini-2.0-flash-lite (1M/8K), gemini-2.5-pro, gemini-2.5-flash (1M/65K)
+
+      Test results: 19 tests, all PASS. slog.Warn emitted on compress fallback verified.
+
+      All 8 acceptance criteria covered:
+      AC1: gemini-2.0-flash lookup with full field check
+      AC2: gemini-2.5-pro with valid CompressModelID field
+      AC3: custom profile overrides built-in
+      AC4: unknown model returns ErrModelNotFound
+      AC5: empty ModelID returns error, nil registry
+      AC6: zero ContextWindowTokens returns error, nil registry
+      AC7: CompressModelID empty => fallback to ModelID + slog.Warn
+      AC8: zero cost fields are valid (no error)

@@ -5,6 +5,8 @@ completed-by:
   backlog: jules
   refined: jensen
   in-progress: james
+  testing: judge
+  review: jobs
 acceptance:
   # Happy path — successful scaffold
   - given: 空專案目錄（僅含 docs/）
@@ -88,6 +90,10 @@ history:
     at: 2026-03-22T14:00:00+08:00
   - stage: testing
     at: "2026-03-22T15:00:00+08:00"
+  - stage: review
+    at: "2026-03-22T16:00:00+08:00"
+  - stage: done
+    at: "2026-03-22T17:00:00+08:00"
 description: |
   初始化 Go module、引入 ADK Go 依賴、建立專案目錄結構。
 
@@ -192,3 +198,95 @@ comments:
       - go mod verify passes
       - ADK coupling confined to cmd/agent/main.go as per architecture notes
       - internal/memory/ is empty (no .go files) — ready for S0-S4 cards
+  - author: judge
+    at: "2026-03-22T16:00:00+08:00"
+    text: |-
+      ## Test Verification Report
+
+      **Verdict:** PASS
+
+      ### Acceptance Criteria Coverage
+      - [x] AC1 — go.mod exists with module path github.com/neokn/agenticsystem; go directive is 1.25.6 (>= 1.24)
+      - [x] AC2 — go.mod require section contains google.golang.org/adk v0.6.0 and google.golang.org/genai v1.51.0; go.sum present with 87 lines; go mod verify passes with "all modules verified"
+      - [x] AC3 — go build ./... completes with zero errors (empty output = success)
+      - [x] AC4 — go vet ./... completes with zero warnings (empty output = success)
+      - [x] AC5 — cmd/agent/main.go exists with blank import of google.golang.org/adk/runner; internal/memory/.gitkeep present; configs/default.json exists with valid JSON
+      - [x] AC6 (edge: incorrect import) — typo in import path produces "no required module provides package...; to add it: go get" — clear and specific
+      - [x] AC6 (edge: empty configs) — configs/default.json contains valid JSON object; go build and go vet are unaffected
+      - [x] AC6 (edge: empty internal/memory/) — directory contains only .gitkeep (no .go files); go build ./... succeeds
+
+      ### Test Quality
+      - AAA structure: N/A — this is a project scaffolding card with no automated tests. Verification was performed by executing go build, go vet, go mod verify, and manual file inspection.
+      - Naming: N/A
+      - Pyramid: N/A — no test files required for pure scaffolding
+
+      ### Test Results
+      - Total: 0 test files (expected for scaffolding-only card)
+      - go build ./...: PASS
+      - go vet ./...: PASS
+      - go mod verify: PASS ("all modules verified")
+
+      ### Issues Found
+      - None. All acceptance criteria satisfied. Implementation matches architecture notes exactly: ADK coupling confined to cmd/agent/main.go, internal/memory/ has no .go files, config JSON is valid and empty-safe.
+  - author: jobs
+    at: "2026-03-22T17:00:00+08:00"
+    text: |
+      ## Code Review by Jobs
+
+      **Overall Assessment:** LGTM WITH COMMENTS
+      **Code Health Impact:** Improves
+
+      ### Critical Issues (Must Fix)
+      - None.
+
+      ### Should Fix
+      - `go.mod:32` — `google.golang.org/genai v1.51.0` is marked `// indirect`.
+        The card description and acceptance criteria explicitly name `genai` as a
+        direct dependency (`go get google.golang.org/genai`). It should appear in
+        the top `require` block without the `// indirect` annotation. As-is, a
+        future `go mod tidy` after genai is imported in source files will promote
+        it automatically, but expressing the intent now is cleaner and prevents
+        confusion for implementors of S0-S4. Fix: move it to the top `require`
+        block and remove `// indirect`.
+
+      ### Nit
+      - `cmd/agent/main.go` — The three TODO comments are clear and correctly
+        sequenced per ADR-0003 (create genai.Client, pass to both gemini.NewModel
+        and NewMemoryPlugin). Consider adding a reference to ADR-0003 by filename
+        so future implementors locate the DI rationale without searching. Not a
+        blocker.
+      - `configs/default.json` — JSON has no comment syntax, so the TODO intent
+        mentioned in the task ("add TODO field placeholder comment") is not
+        representable. An adjacent README.md in configs/ or a `// see` comment in
+        the eventual Go config struct would carry that context forward. Low
+        priority for a scaffolding card.
+
+      ### Good Things
+      - The blank import `_ "google.golang.org/adk/runner"` is exactly the right
+        pattern for confining ADK coupling to cmd/ while keeping internal/memory/
+        testable without a full runner. Clean execution of the architecture boundary.
+      - `go.mod` go directive is 1.25.6 — well above the 1.24+ minimum the spec
+        mandates for the genai tokenizer sub-package. No build risk on that front.
+      - `internal/memory/.gitkeep` correctly tracks the empty directory without
+        any .go files. Nothing speculative was added — proportionate to card scope.
+      - `configs/default.json` uses exactly the three fields the spec names for
+        the S0 config surface (model, maxTokens, compressionStrategy). No premature
+        additions.
+      - All three ADRs (0001 error conventions, 0002 MemoryLayout immutability,
+        0003 genai.Client DI) are fully consistent with the scaffolding produced.
+        The architecture notes in the card map precisely to what was built.
+      - Judge's verification is thorough for a scaffolding card: go build, go vet,
+        go mod verify, and all six acceptance criteria including edge cases are
+        explicitly confirmed.
+
+      ### Code Smells Detected
+      | Smell | Location | Severity | Treatment |
+      |-------|----------|----------|-----------|
+      | None detected | — | — | — |
+
+      ### Recommended Next Steps
+      1. Move `google.golang.org/genai` from the indirect block to the direct
+         `require` block in go.mod (Should Fix above — do before S0 lands).
+      2. Proceed to S0 card (ModelProfile) — the scaffold is fully ready.
+      3. When wiring main.go in the demo card, reference ADR-0003 by filename in
+         the TODO comment for future-developer clarity.
