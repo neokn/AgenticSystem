@@ -353,6 +353,63 @@ func TestNewLayout_should_succeed_when_remaining_capacity_is_just_enough(t *test
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 8 — Complete coverage for all 6 acceptance criteria
+// ---------------------------------------------------------------------------
+
+// AC#2 precision: verify sum invariant after auto-raise on 200k context
+func TestNewLayout_should_sum_exactly_after_buffer_auto_raise_200k(t *testing.T) {
+	// AC#2: context=200,000, max_output=65,536
+	profile := ModelProfile{
+		ContextWindowTokens: 200_000,
+		MaxOutputTokens:     65_536,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	layout, err := NewLayout(profile, cfg)
+	if err != nil {
+		t.Fatalf("NewLayout() unexpected error: %v", err)
+	}
+	if layout.Total() != 200_000 {
+		t.Errorf("Total() = %d, want 200000 (sum invariant after auto-raise)", layout.Total())
+	}
+	if layout.Buffer() != 65_536 {
+		t.Errorf("Buffer() = %d, want 65536 (max_output_tokens)", layout.Buffer())
+	}
+}
+
+// AC#4 explicit: gemini-2.5-pro with BUFFER auto-raise still sums correctly
+func TestNewLayout_should_sum_exactly_with_gemini_25_pro_profile(t *testing.T) {
+	// gemini-2.5-pro: 1,048,576 context, 65,536 max_output
+	profile := ModelProfile{
+		ContextWindowTokens: 1_048_576,
+		MaxOutputTokens:     65_536,
+	}
+	cfg := LayoutConfig{
+		PinnedRatio:  0.15,
+		SummaryRatio: 0.25,
+		ActiveRatio:  0.50,
+		BufferRatio:  0.10,
+	}
+
+	layout, err := NewLayout(profile, cfg)
+	if err != nil {
+		t.Fatalf("NewLayout() unexpected error: %v", err)
+	}
+	// buffer = floor(1,048,576 * 0.10) = 104,857 which is >= 65,536 → no raise
+	if layout.Total() != 1_048_576 {
+		t.Errorf("Total() = %d, want 1048576", layout.Total())
+	}
+	if layout.Buffer() != 104_857 {
+		t.Errorf("Buffer() = %d, want 104857 (no raise needed)", layout.Buffer())
+	}
+}
+
 func TestMemoryLayout_Total_should_sum_all_four_segments(t *testing.T) {
 	// Arrange
 	l := MemoryLayout{pinned: 10, summary: 20, active: 30, buffer: 40}
