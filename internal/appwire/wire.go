@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/agent"
@@ -20,8 +22,10 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/adk/tool/mcptoolset"
 
 	"github.com/neokn/agenticsystem/internal/agentdef"
+	"github.com/neokn/agenticsystem/internal/mcpconfig"
 	"github.com/neokn/agenticsystem/internal/memory"
 	"github.com/neokn/agenticsystem/internal/shelltool"
 )
@@ -61,6 +65,29 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 	def, err := agentdef.Load(cfg.AgentDir, cfg.AgentName)
 	if err != nil {
 		return nil, fmt.Errorf("appwire: loading agent definition: %w", err)
+	}
+
+	// --- Load MCP server config (optional: absent file returns nil, nil) ---
+	mcpCfg, err := mcpconfig.Load(cfg.AgentDir, cfg.AgentName)
+	if err != nil {
+		return nil, fmt.Errorf("appwire: %w", err)
+	}
+
+	// --- Build MCP toolsets ---
+	var toolsets []tool.Toolset
+	if mcpCfg != nil {
+		for _, srv := range mcpCfg.Servers {
+			env := append(os.Environ(), envMapToSlice(srv.Env)...)
+			cmd := exec.Command(srv.Command, srv.Args...)
+			cmd.Env = env
+			ts, err := mcptoolset.New(mcptoolset.Config{
+				Transport: &mcp.CommandTransport{Command: cmd},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("appwire: mcp server %q: %w", srv.Name, err)
+			}
+			toolsets = append(toolsets, ts)
+		}
 	}
 
 	// --- genai client (for compress worker) ---
@@ -116,6 +143,7 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 		Instruction: def.Instruction,
 		Description: "",
 		Tools:       []tool.Tool{shellTool},
+		Toolsets:    toolsets,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("appwire: creating LLM agent: %w", err)
@@ -219,4 +247,20 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 		PluginConfig:   pluginCfg,
 		AppName:        cfg.AppName,
 	}, nil
+}
+
+// envMapToSlice converts a map[string]string into a slice of "KEY=value" strings
+// suitable for appending to exec.Cmd.Env. Entries with an empty key are skipped.
+func envMapToSlice(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(env))
+	for k, v := range env {
+		if k == "" {
+			continue
+		}
+		result = append(result, k+"="+v)
+	}
+	return result
 }
