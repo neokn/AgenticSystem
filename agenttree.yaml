@@ -1,0 +1,109 @@
+# Agent Tree Configuration
+# Declarative description of the Root -> Workflow -> Agent hierarchy.
+# See docs/agent-tree-config-guide.md for schema details.
+
+version: "1"
+
+defaults:
+  model: "gemini-3-flash-preview"
+
+root:
+  name: root
+  type: llm
+  description: "System entry point. Analyzes user intent and routes to appropriate workflow or handles directly."
+  prompt_file: root
+  tools:
+    - shell_exec
+  mcp_servers:
+    - example-mcp-server
+
+  sub_agents:
+    # --- Pattern 1: Plan-Execute-Report (SequentialAgent) ---
+    # For complex multi-step tasks: research, refactoring, document writing.
+    - name: plan_execute_report
+      type: sequential
+      description: "Handles complex tasks that need planning, execution, and summarization. Use for research, analysis, code refactoring, or document writing."
+      sub_agents:
+        - name: planner
+          type: llm
+          description: "Analyzes the task, creates a structured step-by-step plan."
+          prompt_file: planner
+          output_key: plan
+
+        - name: executor
+          type: llm
+          description: "Executes the plan step by step, producing artifacts."
+          prompt_file: executor
+          output_key: artifacts
+          tools:
+            - shell_exec
+
+        - name: reporter
+          type: llm
+          description: "Summarizes execution results into a final report."
+          prompt_file: reporter
+          output_key: summary
+
+    # --- Pattern 2: Iterative Refinement (LoopAgent) ---
+    # For tasks that need repeated improvement: code writing, text polishing.
+    - name: iterative_refinement
+      type: loop
+      description: "Handles tasks requiring iterative improvement. Use for writing code that must pass tests, polishing text, or any produce-then-evaluate cycle."
+      max_iterations: 5
+      sub_agents:
+        - name: refinement_step
+          type: sequential
+          sub_agents:
+            - name: worker
+              type: llm
+              description: "Produces or revises a draft based on requirements and previous feedback."
+              prompt_file: worker
+              output_key: draft
+              tools:
+                - shell_exec
+
+            - name: evaluator
+              type: llm
+              description: "Evaluates the draft against acceptance criteria and decides if iteration should continue."
+              prompt_file: evaluator
+              output_key: evaluation
+
+    # --- Pattern 3: Nested Composition ---
+    # Plan-Execute-Report with iterative executor stage.
+    - name: plan_iterate_report
+      type: sequential
+      description: "Handles complex tasks requiring both planning and iterative execution. Use for module refactoring with tests, or any task needing plan + produce-evaluate cycles + final report."
+      sub_agents:
+        - name: nested_planner
+          type: llm
+          description: "Analyzes the task, creates a plan with iteration criteria."
+          prompt_file: planner
+          output_key: plan
+
+        - name: iterate_execute
+          type: loop
+          description: "Iteratively executes the plan until quality criteria are met."
+          max_iterations: 5
+          sub_agents:
+            - name: iterate_step
+              type: sequential
+              sub_agents:
+                - name: iterate_worker
+                  type: llm
+                  description: "Executes plan steps, producing or revising work."
+                  prompt_file: worker
+                  output_key: draft
+                  tools:
+                    - shell_exec
+
+                - name: iterate_evaluator
+                  type: llm
+                  description: "Evaluates work against plan criteria."
+                  prompt_file: evaluator
+                  output_key: evaluation
+
+        - name: nested_reporter
+          type: llm
+          description: "Produces final report after iterative execution completes."
+          prompt_file: reporter
+          output_key: summary

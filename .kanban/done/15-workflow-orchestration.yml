@@ -8,6 +8,10 @@ depends-on:
 history:
   - stage: backlog
     at: 2026-03-23T00:00:00+08:00
+  - stage: backlog
+    at: "2026-03-24T10:00:00+08:00"
+  - stage: done
+    at: "2026-03-24T11:00:00+08:00"
 description: |
   在 Phase 1 的 agent tree 基礎設施之上，建立第一批可重用的 workflow patterns。
   這些 pattern 是通用骨架，不綁特定 domain——任何需要「多步驟」或「迭代」的任務都能套用。
@@ -67,21 +71,26 @@ description: |
     - Pattern 定義在 config 中，作為可重用的 template
 tasks:
   - text: "定義 workflow state keys 規範：user_intent, plan, artifacts, draft, evaluation, summary 等，作為 Phase 1 通用 state schema 的擴展"
-    done: false
+    done: true
   - text: "在 agent tree config 中設計 workflow template 區塊：宣告式描述 pattern 結構 + 內部 agent 的 prompt/tool binding"
-    done: false
+    done: true
   - text: "實作 Plan-Execute-Report pattern：SequentialAgent + Planner/Executor/Reporter 三個 LlmAgent"
-    done: false
+    done: true
   - text: "撰寫 Planner / Executor / Reporter 的通用 prompt template（domain-agnostic）"
-    done: false
+    done: true
   - text: "實作 Iterative Refinement pattern：LoopAgent + Sequential[Worker, Evaluator]"
-    done: false
+    done: true
   - text: "撰寫 Worker / Evaluator 的通用 prompt template（含 loop 結束條件判斷）"
-    done: false
+    done: true
   - text: "更新 Root Agent prompt：加入 workflow pattern 觸發邏輯（意圖 → 選擇 pattern）"
-    done: false
+    done: true
   - text: "驗證嵌套組合：Plan-Execute-Report 中嵌入 Iterative Refinement"
-    done: false
+    done: true
   - text: "端到端測試：複雜任務走完整 workflow → 產出正確 artifacts + summary"
-    done: false
-comments: []
+    done: true
+comments:
+  - author: joshua
+    at: "2026-03-24T11:00:00+08:00"
+    text: Delivered together with card 05 as a single cohesive implementation. Both patterns (Plan-Execute-Report, Iterative Refinement) plus nested composition (Plan-Iterate-Report) are fully defined in agenttree.yaml, with prompts and documentation.
+completed-by:
+  backlog: joshua

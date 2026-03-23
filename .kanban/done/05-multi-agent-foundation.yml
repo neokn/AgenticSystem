@@ -6,6 +6,10 @@ labels:
 history:
   - stage: backlog
     at: 2026-03-23T00:00:00+08:00
+  - stage: backlog
+    at: "2026-03-24T10:00:00+08:00"
+  - stage: done
+    at: "2026-03-24T11:00:00+08:00"
 description: |
   將現有單一 LlmAgent 演進為完整的 agentic system 基礎架構。
   核心概念：清楚的 Root 入口，加上可組合的 agent tree，
@@ -58,21 +62,26 @@ description: |
     兩層 loop 共同保證任務使命必達。
 tasks:
   - text: "設計 agent tree 設定檔 schema：宣告式描述 Root → Workflow → Agent 樹結構、agent type mapping、tool binding"
-    done: false
+    done: true
   - text: "改造 agentdef 支援載入多個 agent definition（Root + 任意深度 sub-agents）"
-    done: false
+    done: true
   - text: "改造 appwire 遞迴建構 agent tree：根據 config 組合 LlmAgent / Sequential / Loop / Parallel"
-    done: false
+    done: true
   - text: "實作 session state 通用 schema：定義 agent 間溝通的 state keys 規範"
-    done: false
+    done: true
   - text: "建立 Root Agent prompt：意圖判斷 + workflow routing + 直接處理 fallback"
-    done: false
+    done: true
   - text: "實作 transfer / escalate 雙向流動機制（Root ↔ Sub-Agent）"
-    done: false
+    done: true
   - text: "MCP toolset 可宣告式掛載到指定 agent（而非全掛 Root）"
-    done: false
+    done: true
   - text: "端到端驗證：Root 載入 config → 建構 tree → 建一個 demo sub-agent → transfer/escalate 來回正常"
-    done: false
+    done: true
   - text: 加入單元測試與整合測試
-    done: false
-comments: []
+    done: true
+comments:
+  - author: joshua
+    at: "2026-03-24T11:00:00+08:00"
+    text: 'Phase 1 + Phase 2 implemented together as a single cohesive delivery. Deliverables: (1) domain.AgentTreeConfig types with validation, (2) agenttree.yaml declarative config, (3) agenttree.Builder for recursive ADK agent construction, (4) YAML config loader, (5) wire.go dual-mode (tree vs legacy), (6) Root/Planner/Executor/Reporter/Worker/Evaluator prompts, (7) Plan-Execute-Report + Iterative Refinement + Plan-Iterate-Report patterns, (8) state keys convention, (9) 4 architecture docs (zh-Hant-TW), (10) full test coverage.'
+completed-by:
+  backlog: joshua
