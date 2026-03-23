@@ -10,7 +10,7 @@ import (
 	"github.com/neokn/agenticsystem/internal/mcpconfig"
 )
 
-// writeFile writes content to baseDir/agents/<agentDir>/mcp.json, creating
+// writeMCPFile writes content to baseDir/agents/<agentDir>/mcp.json, creating
 // intermediate directories as needed. Returns the baseDir.
 func writeMCPFile(t *testing.T, agentDir, content string) string {
 	t.Helper()

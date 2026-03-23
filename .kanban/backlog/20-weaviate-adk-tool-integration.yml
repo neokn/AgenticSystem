@@ -1,0 +1,44 @@
+title: Weaviate DB ADK Tool 整合（Python → Go 移植）
+assignee: neokn
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+description: |
+  參考 Python 實作 weaviate/recipes/.../weaviate_adk_agent，
+  將 Weaviate DB 操作轉為 Go ADK Tool，讓 agent 可透過自然語言
+  對 Weaviate 進行 CRUD、語意搜尋、hybrid search 等操作。
+
+  Python 參考：https://github.com/weaviate/recipes/tree/main/integrations/cloud-hyperscalers/google/weaviate_adk_agent
+
+  原始實作包含 16 個 tool：
+  - 連線管理：check_connection
+  - Collection 操作：create/delete/list/get_schema
+  - CRUD：insert/get/update/delete object, delete_all, batch_insert
+  - 搜尋：search_near_text, search_near_vector, hybrid_search
+  - 分析：aggregate_objects, query_objects
+
+  移植策略：
+  - 使用 Go weaviate client (github.com/weaviate/weaviate-go-client)
+  - 以 ADK functiontool.New 或 mcptoolset 註冊 tool
+  - 遵循 internal/shelltool 的 package 結構模式
+  - 環境變數：WEAVIATE_URL, WEAVIATE_API_KEY
+tasks:
+  - text: 調研 weaviate-go-client v4 API 與 Python client 對應關係
+    done: false
+  - text: 建立 internal/weaviatetool package 骨架
+    done: false
+  - text: 實作 WeaviateClient（連線管理、auto-detect deployment type）
+    done: false
+  - text: 實作 Collection 操作 tool（create/delete/list/get_schema）
+    done: false
+  - text: 實作 CRUD tool（insert/get/update/delete/batch_insert）
+    done: false
+  - text: 實作搜尋 tool（near_text/near_vector/hybrid_search）
+    done: false
+  - text: 實作分析 tool（aggregate/query_objects）
+    done: false
+  - text: 整合到 appwire 啟動流程，註冊為 ADK Tool
+    done: false
+  - text: 加入單元測試（table-driven, mock client）
+    done: false
+comments: []

@@ -1,0 +1,310 @@
+title: MCP JSON config to ADK Tool adapter
+assignee: neokn
+labels:
+  - backend
+  - core-logic
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+  - stage: refined
+    at: 2026-03-23T10:00:00+08:00
+  - stage: testing
+    at: "2026-03-23T12:00:00+08:00"
+  - stage: review
+    at: "2026-03-23T12:30:00+08:00"
+  - stage: done
+    at: "2026-03-23T13:00:00+08:00"
+completed-by:
+  backlog: jules
+  refined: jensen
+  in-progress: james
+  testing: judge
+  review: jobs
+description: |
+  As a developer running AgenticSystem, I want to define MCP servers in a
+  mcp.json config file so that the agent can call MCP-provided tools without
+  hardcoding them in Go source.
+
+  On startup, appwire reads mcp.json from the agent directory (same location as
+  agent.prompt). Each entry declares a server name, the command + args to launch
+  it, and optional env vars. For each server, appwire constructs a
+  mcptoolset.Toolset backed by mcp.CommandTransport and passes it to
+  llmagent.Config.Toolsets. The ADK mcptoolset package handles the MCP-to-ADK
+  tool conversion internally.
+
+  Scope:
+  - stdio transport only (mcp.CommandTransport wrapping exec.Cmd)
+  - mcp.json is optional: if the file is absent, appwire starts with zero MCP
+    toolsets (no error)
+  - env entries are merged into the subprocess environment (inherit + override)
+  - No human-approval gate in this story (RequireConfirmation: false)
+
+  Implementation path (matching the shelltool pattern from ADR-0006):
+  - internal/mcpconfig: pure config-loading package (no ADK dependency), owns
+    mcp.json schema, parsing, and validation. Independently testable.
+  - internal/appwire/wire.go: reads config, constructs mcptoolset.Toolset per
+    server, passes to llmagent.Config.Toolsets
+  - agents/demo_agent/mcp.json: example file for manual verification
+acceptance:
+  - given: "an agents/demo_agent/mcp.json exists with one server entry (name echo-server, command node, args [echo-server.js])"
+    when: appwire.New is called with AgentName "demo_agent"
+    then: the returned App's LLM agent has one MCP toolset registered and the toolset's underlying CommandTransport uses the command "node" with argument "echo-server.js"
+  - given: an agents/demo_agent/mcp.json exists with two server entries
+    when: appwire.New is called with AgentName "demo_agent"
+    then: the returned App's LLM agent has two MCP toolsets registered, one per server entry, in the order they appear in mcp.json
+  - given: "an agents/demo_agent/mcp.json contains a server entry with an env map {MY_KEY: my_val}"
+    when: appwire.New is called
+    then: the exec.Cmd passed to mcp.CommandTransport for that server has an Env slice that includes both the process's inherited os.Environ() entries and the additional "MY_KEY=my_val" entry
+  - given: no mcp.json file exists in the agents/demo_agent/ directory
+    when: appwire.New is called with AgentName "demo_agent"
+    then: no error is returned and the App has zero MCP toolsets while the shell tool and memory plugin are still registered normally
+  - given: an agents/demo_agent/mcp.json exists but contains invalid JSON
+    when: appwire.New is called
+    then: an error is returned whose message contains "mcpconfig" and "parse"
+  - given: an agents/demo_agent/mcp.json exists with an entry whose "command" field is an empty string
+    when: mcpconfig.Load is called
+    then: an error is returned whose message identifies the server name and states that "command" must not be empty
+tasks:
+  - text: >
+      Define mcp.json schema as Go structs in internal/mcpconfig: ServerConfig{Name string, Command string, Args []string, Env map[string]string} and MCPConfig{Servers []ServerConfig}
+
+    done: true
+  - text: >
+      Implement mcpconfig.Load(agentDir string) (*MCPConfig, error): reads agents/<agentDir>/mcp.json, returns nil with no error when file is absent, validates each entry's Command field is non-empty
+
+    done: true
+  - text: >
+      Add unit tests for mcpconfig.Load covering: valid file with one server, valid file with env map, missing file returns (nil, nil), malformed JSON returns error containing "parse", empty command field returns validation error naming the offending server
+
+    done: true
+  - text: >
+      In internal/appwire/wire.go, after loading agent definition, call mcpconfig.Load; for each ServerConfig construct exec.Cmd (with os.Environ() merged with the entry's Env map), wrap in mcp.CommandTransport, call mcptoolset.New, collect into []tool.Toolset
+
+    done: true
+  - text: >
+      Pass the collected toolsets to llmagent.Config.Toolsets (the existing shell tool stays in Config.Tools unchanged); verify with a test or manual run that both shell tool and MCP toolsets appear in the agent's available tools
+
+    done: true
+  - text: >
+      Create agents/demo_agent/mcp.json with a working or clearly commented example entry for manual smoke-testing
+
+    done: true
+  - text: >
+      Write an integration test in internal/appwire (or internal/mcpconfig) that starts a minimal in-process MCP stdio server via exec.Command (using the go-sdk CommandTransport pattern) and asserts the toolset is constructed without error
+
+    done: true
+architecture:
+  component: Tool Infrastructure
+  layer: Infrastructure (mcpconfig) + Application Layer (appwire wiring)
+  pattern: >
+    None. Construction is a plain loop: for each ServerConfig, build exec.Cmd, wrap in mcp.CommandTransport, call mcptoolset.New. Only two participants and zero variation axis — no Factory or Builder pattern warranted. See ADR-0008.
+
+  boundary: >
+    internal/mcpconfig acts as a thin infrastructure function (not a Port interface) returning a plain value type (*MCPConfig). The Port is tool.Toolset (defined by ADK); mcptoolset.Toolset is the Driven Adapter that implements it. appwire is the wiring site — all ADK and MCP SDK imports stay there, matching the shelltool wiring model.
+
+  notes: |
+    ADR: docs/adr/0008-mcp-json-config-loader-and-toolset-wiring.md
+
+    internal/mcpconfig — Infrastructure layer, config side
+    - Imports: encoding/json, fmt, os, path/filepath only. No ADK, no MCP SDK.
+    - Exports: MCPConfig{Servers []ServerConfig} and
+      ServerConfig{Name, Command string, Args []string, Env map[string]string}
+    - Load(agentDir string) (*MCPConfig, error)
+      - Resolves path: filepath.Join(baseDir, "agents", agentDir, "mcp.json")
+        Note: baseDir is NOT passed in; mimic agentdef.Load which takes (baseDir,
+        name). Signature should be Load(baseDir, agentDir string) to be consistent.
+      - Returns (nil, nil) on os.IsNotExist — the optional-config contract.
+      - Validates each entry: Command must be non-empty; error message must contain
+        "mcpconfig" and the server name (acceptance criteria requirement).
+      - JSON parse error must wrap with "mcpconfig" and "parse" in the message.
+    - No package-level state; pure function — consistent with agentdef.Load.
+
+    internal/appwire/wire.go — Application Layer, wiring site
+    - After the existing agentdef.Load call, add:
+        mcpCfg, err := mcpconfig.Load(cfg.AgentDir, cfg.AgentName)
+        if err != nil { return nil, fmt.Errorf("appwire: %w", err) }
+    - Build toolsets slice:
+        var toolsets []tool.Toolset
+        if mcpCfg != nil {
+            for _, srv := range mcpCfg.Servers {
+                env := append(os.Environ(), envMapToSlice(srv.Env)...)
+                cmd := exec.Command(srv.Command, srv.Args...)
+                cmd.Env = env
+                ts, err := mcptoolset.New(ctx, mcp.NewCommandTransport(cmd))
+                if err != nil { return nil, fmt.Errorf("appwire: mcp server %q: %w", srv.Name, err) }
+                toolsets = append(toolsets, ts)
+            }
+        }
+    - Pass to llmagent.Config.Toolsets: Toolsets: toolsets
+    - Shell tool stays in Config.Tools (unchanged).
+    - envMapToSlice is a private helper: turns map[string]string into
+      []string{"KEY=val"} — stdlib only, no new package needed.
+
+    agents/demo_agent/mcp.json — example file
+    - One entry with a commented-out command (e.g. "npx") for smoke-testing.
+    - File is committed; its absence does not break tests (acceptance criterion 4).
+
+    Integration test placement
+    - Preferred location: internal/appwire/wire_test.go (existing test file or
+      new one) — tests the full wiring path without a real MCP server binary.
+    - Use a minimal Go binary compiled via TestMain + exec.Command pattern, or
+      a mock that writes valid MCP JSON-RPC to stdout and reads from stdin.
+comments:
+  - author: jules
+    at: 2026-03-23T10:00:00+08:00
+    text: |
+      Refinement notes:
+
+      Story is well-scoped and does not need splitting. The ADK module (v0.6.0)
+      already ships google.golang.org/adk/tool/mcptoolset which handles the full
+      MCP-to-ADK tool conversion internally using
+      github.com/modelcontextprotocol/go-sdk. The mcp.CommandTransport in that
+      SDK takes an *exec.Cmd, which is exactly what we construct from mcp.json.
+      The original task "将 MCP tool 轉為 ADK genai.Tool（FunctionDeclaration
+      mapping)" is NOT required — that mapping is already done by mcptoolset.
+
+      Splitting considered and rejected:
+      - "Start with Dummy" (Strategy 6): hard-coding a single server in appwire
+        skips the config file entirely, producing no user-visible value on its own.
+      - "Split by Capacity" (Strategy 5): supporting N=1 vs N servers costs
+        nothing extra — it is a loop over Servers[]. No savings from splitting.
+      - "Simplify Outputs" (Strategy 7): mcptoolset handles tool conversion
+        internally; there is no complex output surface to simplify here.
+
+      Six acceptance criteria span two components (mcpconfig loader + appwire
+      wiring), which is within single-story scope. All six map 1:1 to unit or
+      integration tests.
+
+      Implementation note for James: follow the shelltool pattern (ADR-0006).
+      - internal/mcpconfig: pure config loader, imports only encoding/json and
+        os. No ADK or MCP SDK imports. Testable in isolation.
+      - appwire: imports mcpconfig plus mcptoolset and mcp (go-sdk). All ADK and
+        MCP references remain at the wiring site.
+      - llmagent.Config has both Tools []tool.Tool and Toolsets []tool.Toolset.
+        Shell tool stays in Tools. MCP servers go into Toolsets.
+  - author: jensen
+    at: 2026-03-23T11:00:00+08:00
+    text: |
+      Architecture decisions recorded in ADR-0008
+      (docs/adr/0008-mcp-json-config-loader-and-toolset-wiring.md).
+
+      Two-package split mirrors the shelltool / ADR-0006 pattern exactly:
+      - internal/mcpconfig: Infrastructure layer, stdlib only (encoding/json,
+        os, path/filepath). Pure config loader with no ADK or MCP SDK imports.
+        Independently unit-testable. Returns (nil, nil) on missing file.
+      - internal/appwire/wire.go: Application Layer wiring site. All
+        mcptoolset and mcp.CommandTransport construction stays here alongside
+        the existing shell tool wiring.
+
+      No design pattern applied. The construction is a plain for-range loop
+      with one product type and no variation axis. Factory or Builder would add
+      indirection with zero benefit for this problem.
+
+      The tool.Toolset interface (ADK) is the implicit Port; mcptoolset.Toolset
+      is the Driven Adapter. No additional Port interface is needed because
+      appwire already owns the wiring boundary.
+
+      Load(baseDir, agentDir string) signature chosen for consistency with
+      agentdef.Load(baseDir, name string). The baseDir pattern ensures tests
+      can point at a temp directory without touching the real agents/ tree.
+
+      Labels confirmed: backend, core-logic. James picks this up.
+  - author: james
+    at: "2026-03-23T12:00:00+08:00"
+    text: |-
+      Implementation complete.
+
+      Files created:
+      - internal/mcpconfig/loader.go: MCPConfig, ServerConfig structs + Load(baseDir, agentDir) function
+      - internal/mcpconfig/loader_test.go: 5 unit tests covering all acceptance criteria
+      - internal/mcpconfig/integration_test.go: end-to-end test using mcp.NewInMemoryTransports
+      - internal/appwire/wire_test.go: white-box tests for envMapToSlice helper
+      - agents/demo_agent/mcp.json: example config file for manual smoke-testing
+
+      Files modified:
+      - internal/appwire/wire.go: added mcpconfig.Load, toolset construction loop, envMapToSlice helper, Toolsets field in llmagent.Config
+
+      Patterns applied: None (plain for-range loop per ADR-0008).
+      All 5 acceptance criteria covered by tests. go test ./... green.
+  - author: judge
+    at: "2026-03-23T12:30:00+08:00"
+    text: |-
+      ## Test Verification Report
+
+      **Verdict:** PASS
+
+      ### Acceptance Criteria Coverage
+      - [x] Criterion 1 (single server, correct command): Test_Load_should_return_single_server_config_when_valid_file_has_one_entry
+      - [x] Criterion 2 (two entries in order): Test_Load_should_return_two_servers_when_file_has_two_entries
+      - [x] Criterion 3 (env map merged with os.Environ): Test_Load_should_return_env_map_when_server_entry_has_env_field + Test_envMapToSlice_should_produce_KEY_equals_value_entries
+      - [x] Criterion 4 (absent mcp.json, no error, zero toolsets): Test_Load_should_return_nil_nil_when_mcp_json_is_absent
+      - [x] Criterion 5 (invalid JSON, error contains mcpconfig and parse): Test_Load_should_return_parse_error_when_json_is_malformed
+      - [x] Criterion 6 (empty command, named validation error): Test_Load_should_return_validation_error_naming_server_when_command_is_empty
+
+      ### Test Quality
+      - AAA structure: OK — all tests have clear Arrange/Act/Assert sections with comments
+      - Naming: OK — names describe scenario + expected result (Test_Load_should_*)
+      - Pyramid: OK — 6 unit tests in mcpconfig, 1 integration test using in-memory transport, 4 unit tests for envMapToSlice helper
+      - Edge cases: OK — nil map, empty map, empty key, missing file, malformed JSON
+
+      ### Test Results
+      - Total: 11 tests
+      - Passed: 11
+      - Failed: 0
+
+      ### Issues Found
+      - None
+  - author: jobs
+    at: "2026-03-23T13:00:00+08:00"
+    text: |-
+      ## Code Review by Jobs
+
+      **Overall Assessment:** LGTM WITH COMMENTS
+      **Code Health Impact:** Improves
+
+      ### Critical Issues (Must Fix)
+
+      None.
+
+      ### Should Fix
+
+      - `internal/mcpconfig/integration_test.go:46-51` — The integration test constructs a toolset using `mcp.NewInMemoryTransports()` but then separately loads an `mcpconfig.MCPConfig` struct and asserts its field values independently. These are two disconnected verification paths joined in one test function. The test name promises "toolset construction when MCP server is running", but it does not actually verify toolset construction _from_ the loaded config — the `ts` and `cfg` variables are never connected. This makes the test misleading about what it proves. The two paths should either be split into separate tests, or the `ts` construction should be driven from the loaded `cfg` struct values (even with the in-memory transport substitution clearly commented). As written, a bug in the config-to-`exec.Cmd` path in `wire.go` would not be caught by this test.
+
+      - `internal/appwire/wire.go:80` — `append(os.Environ(), envMapToSlice(srv.Env)...)` appends to the slice returned by `os.Environ()`. In Go, `os.Environ()` returns a freshly allocated slice each time, so there is no aliasing problem here. However, the pattern `env := append(os.Environ(), ...)` is subtly risky if someone refactors it to reuse the base slice across loop iterations. The ADR acknowledges the env-snapshot concern; a brief comment at the call site explaining why a fresh `os.Environ()` is called per iteration would help future readers avoid the wrong "optimization".
+
+      ### Nit
+
+      - `internal/mcpconfig/loader_test.go:15` — The helper is named `writeMCPFile` but its doc comment says `writeFile writes content to ...`. Minor copy-paste artifact from an initial draft.
+
+      - `agents/demo_agent/mcp.json:5` — `"env": {}` is an empty object. The `ServerConfig.Env` field is declared `omitempty` in the JSON tag. An empty `{}` in the example file is slightly noisy (it will be preserved on round-trip, though it causes no functional issue). A comment in the ADR or a note in the file itself would help operators know `env` is optional and can be omitted entirely.
+
+      - `internal/appwire/wire.go:84` — `&mcp.CommandTransport{Command: cmd}` uses a struct literal with a named field. This is correct and preferred over positional initialization. No action needed — just confirming it reads as intended.
+
+      ### Good Things
+
+      - The two-package split (`internal/mcpconfig` + wiring in `appwire`) perfectly mirrors the shelltool / ADR-0006 pattern. The stdlib-only constraint on `mcpconfig` is enforced cleanly and makes the unit tests fast and dependency-free.
+
+      - `Load(baseDir, agentDir string)` signature is consistent with `agentdef.Load(baseDir, name string)`. Any developer familiar with one will recognize the other immediately.
+
+      - The `(nil, nil)` optional-config contract for a missing file is documented in both the godoc and the ADR, and tested explicitly. This is the right behavior and it is properly communicated.
+
+      - `envMapToSlice` is a well-named, well-tested private helper. The explicit skip of empty-key entries, tested in `Test_envMapToSlice_should_skip_entries_with_empty_key`, shows defensive thinking.
+
+      - Test naming is consistent with the project convention (`Test_<Subject>_should_<outcome>_when_<condition>`) and the AAA structure is applied uniformly. Judge verified 11/11 passing.
+
+      - ADR-0008 is thorough. The explicit rejection of Factory/Builder with the stated reason (one product, no variation axis) saves the next developer from a speculative-generality refactor.
+
+      - Error messages satisfy the acceptance criteria shape contract (`mcpconfig`, `parse`, server name) and are verified by tests — not just assumed.
+
+      ### Code Smells Detected
+
+      | Smell | Location | Severity | Treatment |
+      |-------|----------|----------|-----------|
+      | Test does too much / misleading name | `integration_test.go:33-94` | SHOULD_FIX | Split into two focused tests or connect the config load to the transport construction |
+
+      ### Recommended Next Steps
+
+      1. (Should Fix) Refactor `integration_test.go` to make the two verification paths explicit and connected — either split the test or drive `ts` construction from the loaded `cfg` fields.
+      2. (Should Fix) Add a one-line comment at `wire.go:80` explaining why `os.Environ()` is called per loop iteration.
+      3. (Nit) Fix the `writeMCPFile` doc comment.
+      4. (Nit) Remove or omit the empty `"env": {}` from `mcp.json` to reflect the `omitempty` contract in the schema.

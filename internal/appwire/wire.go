@@ -77,6 +77,7 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 	var toolsets []tool.Toolset
 	if mcpCfg != nil {
 		for _, srv := range mcpCfg.Servers {
+			// fresh slice per server; do not hoist — each cmd.Env must be independent
 			env := append(os.Environ(), envMapToSlice(srv.Env)...)
 			cmd := exec.Command(srv.Command, srv.Args...)
 			cmd.Env = env

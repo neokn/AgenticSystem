@@ -26,11 +26,10 @@ func weatherHandler(_ context.Context, _ *mcp.CallToolRequest, input weatherInpu
 	return nil, weatherOutput{Summary: "sunny in " + input.City}, nil
 }
 
-// Test_mcpconfig_toolset_construction_should_list_tools_when_mcp_server_is_running
-// verifies end-to-end that config loaded via mcpconfig.Load can be used to
-// construct an mcptoolset.Toolset that successfully lists tools from an
-// in-memory MCP server.
-func Test_mcpconfig_toolset_construction_should_list_tools_when_mcp_server_is_running(t *testing.T) {
+// Test_mcptoolset_construction_should_succeed_when_in_memory_server_is_running
+// verifies that mcptoolset.New succeeds with an in-memory MCP transport,
+// confirming the ADK toolset construction path works end-to-end.
+func Test_mcptoolset_construction_should_succeed_when_in_memory_server_is_running(t *testing.T) {
 	// Arrange: set up an in-memory MCP server with one tool.
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
 
@@ -41,17 +40,26 @@ func Test_mcpconfig_toolset_construction_should_list_tools_when_mcp_server_is_ru
 	}
 
 	// Act: build a toolset using the client transport (mirrors what appwire does
-	// after reading mcpconfig — just substituting CommandTransport with the in-memory
+	// after reading mcpconfig — substituting CommandTransport with the in-memory
 	// transport to avoid subprocess requirements in CI).
 	ts, err := mcptoolset.New(mcptoolset.Config{
 		Transport: clientTransport,
 	})
+
+	// Assert
 	if err != nil {
 		t.Fatalf("mcptoolset.New: %v", err)
 	}
+	if ts == nil {
+		t.Fatal("expected non-nil toolset")
+	}
+}
 
-	// Assert: mcpconfig struct round-trip — confirm the config loads and the field
-	// values are exactly what we'd use to build the toolset.
+// Test_mcpconfig_Load_fields_should_match_values_used_by_appwire_for_exec_Cmd
+// verifies that mcpconfig.Load round-trips config fields correctly — these are
+// the exact values appwire uses to build exec.Cmd and CommandTransport.
+func Test_mcpconfig_Load_fields_should_match_values_used_by_appwire_for_exec_Cmd(t *testing.T) {
+	// Arrange
 	base := writeMCPFile(t, "demo_agent", `{
 		"servers": [
 			{
@@ -62,7 +70,11 @@ func Test_mcpconfig_toolset_construction_should_list_tools_when_mcp_server_is_ru
 			}
 		]
 	}`)
+
+	// Act
 	cfg, err := mcpconfig.Load(base, "demo_agent")
+
+	// Assert
 	if err != nil {
 		t.Fatalf("mcpconfig.Load: %v", err)
 	}
@@ -81,14 +93,5 @@ func Test_mcpconfig_toolset_construction_should_list_tools_when_mcp_server_is_ru
 	}
 	if srv.Env["DEBUG"] != "1" {
 		t.Errorf("expected DEBUG=1 in env, got %q", srv.Env["DEBUG"])
-	}
-
-	// The toolset is lazy; assert it returns the tool list without error.
-	// We need an agent.ReadonlyContext — use the internal context helper style
-	// to call Tools. Since we cannot easily build the ADK internal context here,
-	// we verify the toolset object is non-nil (construction succeeded) and the
-	// mcpconfig values are correct. Tool listing is covered by the ADK's own tests.
-	if ts == nil {
-		t.Fatal("expected non-nil toolset")
 	}
 }
