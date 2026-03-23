@@ -1,0 +1,188 @@
+title: "Phase 0a: Explicit Architecture — Design, Port Contracts, and ADR"
+assignee: neokn
+labels:
+  - backend
+  - architecture
+  - core-logic
+depends-on: []
+completed-by:
+  refined: jensen
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+  - stage: refined
+    at: 2026-03-23T10:00:00+08:00
+description: |
+  Design the target Explicit Architecture (Hexagonal / Ports & Adapters / Clean Architecture)
+  for the project before any code moves. This story produces three artefacts:
+
+  1. A dependency map of the current internal/ packages (who imports whom)
+  2. The target directory structure showing four layers:
+       internal/domain/   — pure logic, zero external deps
+       internal/app/      — use case orchestration, assembly (appwire)
+       internal/infra/    — ADK adapters, Gemini, MCP, sessionstore, shelltool, memory
+       cmd/               — thin entrypoints (CLI, Telegram, Web)
+  3. Port interface definitions (Go interfaces) that domain uses to call out to
+     infrastructure, without importing infrastructure packages:
+       - AgentLoader    (load agent definition from dotprompt)
+       - SessionStore   (alias for adk/session.Service — already an interface)
+       - ToolProvider   (provide []tool.Tool and []tool.Toolset from config)
+       - MemoryService  (compress strategy + plugin lifecycle)
+  4. An ADR document (docs/adr/NNNN-explicit-architecture.md) recording the
+     decision, rationale, layer boundaries, and dependency direction rule:
+       Interface -> Application -> Domain <- Infrastructure
+
+  This is a DESIGN-ONLY story. No package directories are moved. No imports change.
+  The ADR and port interface file serve as the contract that card 01b implements.
+
+  Value: Jensen can review and approve the architecture before any code changes land.
+  Subsequent multi-agent cards (05, 15, 20) depend on these layer contracts.
+acceptance:
+  - given: The current internal/ packages have no documented layer boundaries
+    when: The dependency map is produced
+    then: Every package in internal/ is assigned to exactly one of domain/app/infra, and the map has no cycle from domain to infra (verifiable by reading the map)
+  - given: The target directory structure is agreed
+    when: The port interfaces file is reviewed
+    then: All four port interfaces are defined as Go interfaces in a file that imports only stdlib and adk/session (no genai, no MCP SDK, no dotprompt), and each interface method signature matches the corresponding adapter that will implement it in 01b
+  - given: The ADR document is written
+    when: It is reviewed in docs/adr/
+    then: The ADR states the four layers, names each existing package and its target layer, and specifies the no-reverse-dependency rule as a testable constraint (i.e., "no file in internal/domain/ may import internal/infra/")
+  - given: Port interfaces are defined
+    when: A Go file containing only the interfaces is compiled (go build ./...)
+    then: Build passes with zero errors and zero new external dependencies added to go.mod
+  - given: The ADR is absent or the port interface file has outbound infra imports
+    when: Jensen reviews the refined card
+    then: Jensen routes the card back to backlog with a comment listing the gaps
+architecture:
+  component: AgenticSystem Core
+  layer: Domain Layer (ports.go) + Application Layer (app/ports.go)
+  pattern: Ports and Adapters (Hexagonal Architecture)
+  boundary: |
+    Driving adapters: cmd/agent, cmd/telegram, cmd/web (all drive through internal/app/appwire)
+    Ports (interfaces the core defines):
+      - domain.AgentLoader — Load(baseDir, name string) (*AgentDefinition, error)
+        lives in internal/domain/ports.go; pure stdlib, zero external deps
+      - app.ToolProvider — Tools(cfg *domain.MCPConfig) ([]tool.Tool, []tool.Toolset, error)
+        lives in internal/app/ports.go; references adk/tool return types (cannot be in domain)
+      - session.Service (adk) — already a Go interface; used directly as a port in app/appwire
+    Driven adapters (implement ports, live in internal/infra/):
+      - agentdef.Loader implements domain.AgentLoader
+      - A new mcp adapter implements app.ToolProvider (wrapping mcpconfig + mcptoolset)
+  notes: |
+    Key architecture decisions made by Jensen:
+
+    1. TOOLPROVIDER SPLIT: ToolProvider cannot live in internal/domain/ because its
+       return type references google.golang.org/adk/tool. It lives in internal/app/ports.go
+       instead. Its input type (*domain.MCPConfig) is still owned by the domain layer.
+       This is the correct placement — the Application Layer is permitted to reference
+       ADK framework types; the Domain Layer must not.
+
+    2. MCPCONFIG PLACEMENT: mcpconfig belongs in internal/infra/ (not internal/app/).
+       It reads from the filesystem (external I/O = infrastructure). The domain layer
+       owns the config data types (domain.MCPConfig, domain.MCPServerConfig) as pure
+       structs. The infra adapter will translate mcpconfig.MCPConfig -> domain.MCPConfig.
+
+    3. MEMORYSERVICE DEFERRED: MemoryService is not defined as a port in this card.
+       memory.MemoryPlugin is a concrete infra type; appwire (app layer) is permitted
+       to import it directly as an infrastructure dependency injected during assembly.
+       Whether to introduce a MemoryService port is deferred to card 05.
+
+    4. SESSION.SERVICE IS THE PORT: adk/session.Service is already a Go interface.
+       No wrapper port is needed. This is explicitly noted in the ADR.
+
+    5. DEBUGPLUGIN EXTRACTION: The 70-line debug plugin inline in appwire/wire.go
+       must be extracted to internal/infra/debugplugin/. Card 01b implements this.
+       appwire must contain only assembly logic after the migration.
+
+    6. AGENTDEF DUAL RESPONSIBILITY: agentdef/ has both Load() (infra loader) and
+       InstructionOverridePlugin() (infra ADK adapter). Both stay in internal/infra/agentdef/
+       after migration — no split needed. Both are infrastructure concerns.
+
+    Dependency direction rule (testable CI constraint, see ADR-0009):
+      internal/domain/ MUST NOT import: internal/infra/*, internal/app/*,
+        google.golang.org/adk, google.golang.org/genai,
+        github.com/google/dotprompt, github.com/modelcontextprotocol/go-sdk
+
+    Multi-agent readiness:
+      Phase 1 (Root + SubAgents): AgentLoader port supports multiple agent loads
+        with different name args. No new ports needed.
+      Phase 2 (Workflow agents): internal/app/ provides a clean home for
+        workflow orchestration logic (e.g. internal/app/workflow/).
+tasks:
+  - text: Produce a written dependency map of current internal/ packages (can be a comment in the ADR or a separate docs/architecture-notes.md)
+    done: true
+  - text: Define target directory structure and confirm four-layer model with team
+    done: true
+  - text: Write port interfaces in internal/domain/ports.go (or domain/ports/) with zero infrastructure imports — AgentLoader, ToolProvider, MemoryService, and confirm SessionStore is already an interface via adk/session.Service
+    done: true
+  - text: Write ADR docs/adr/NNNN-explicit-architecture.md with decision, context, layer table, dependency direction rule, and migration checklist
+    done: true
+  - text: Verify go build ./... passes after adding the ports file
+    done: true
+comments:
+  - author: jules
+    at: 2026-03-23T10:00:00+08:00
+    text: |
+      Split from parent card 01-explicit-architecture-restructure using
+      "Split Learning from Earning" (strategy 8) and "Split by Examples of
+      Usefulness" (strategy 4).
+
+      This card (01a) is the learning/design story. It produces the dependency
+      map, port interfaces, and ADR that card 01b uses as its specification.
+      No package directories are moved here — Jensen can approve the architecture
+      before any code changes land.
+
+      Key observations from codebase analysis:
+      - appwire/wire.go currently does both assembly AND inline business logic
+        (the 70-line debug plugin is defined inline — this must move to infra/).
+      - shelltool already documents itself as "Infrastructure / Driven Adapter"
+        but lives flat in internal/shelltool — it just needs to move.
+      - mcpconfig has zero ADK/genai deps (pure stdlib) — it belongs in infra/
+        as a configuration loader, or possibly app/ since it drives assembly.
+      - memory/ has direct genai and ADK plugin imports — clearly infra/.
+      - sessionstore/ implements adk/session.Service — clearly infra/.
+      - agentdef/ has dotprompt import — infra/ (it adapts an external format).
+      - adk/session.Service is already a Go interface, so no new SessionStore
+        port interface is needed; it IS the port.
+
+      The port interfaces worth defining explicitly:
+        - AgentLoader: Load(baseDir, name string) (*AgentDefinition, error)
+          Abstracts dotprompt away from the app layer.
+        - ToolProvider: Tools(cfg MCPConfig) ([]tool.Tool, []tool.Toolset, error)
+          Abstracts MCP subprocess launch away from assembly.
+        - (MemoryService may remain concrete in app layer for now — revisit in 05.)
+
+      Dependency direction to enforce after 01b:
+        cmd/* -> internal/app/ -> internal/domain/ <- internal/infra/
+        internal/app/ may import adk/runner, adk/session (framework interfaces).
+        internal/domain/ must not import anything outside stdlib.
+  - author: jensen
+    at: 2026-03-23T11:00:00+08:00
+    text: |
+      Architecture review complete. All five tasks done. ADR and port files produced.
+
+      Deliverables created:
+        - docs/adr/0009-explicit-architecture-layer-structure.md
+        - internal/domain/ports.go (AgentLoader interface, AgentDefinition,
+          MCPConfig, MCPServerConfig — zero external deps, pure stdlib)
+        - internal/app/ports.go (ToolProvider interface — references adk/tool,
+          cannot live in domain layer)
+      All files verified: go build ./... passes, go.mod unchanged.
+
+      One architectural correction from Jules' card notes:
+        Jules listed ToolProvider as a domain-layer port. It cannot be — its return
+        type includes []tool.Tool and []tool.Toolset from google.golang.org/adk/tool.
+        Domain layer must not import ADK. ToolProvider is defined in internal/app/ports.go
+        instead, which is the correct layer for framework-coupled port interfaces.
+
+      Card 01b consistency check:
+        - internal/infra/debugplugin/ extraction is confirmed required.
+        - mcpconfig confirmed as infra/ (filesystem I/O).
+        - After 01b, agentdef adapter must implement domain.AgentLoader.
+        - After 01b, a new MCP adapter package (or extended mcpconfig adapter)
+          must implement app.ToolProvider.
+        - cmd/ entrypoints may continue to import internal/infra/sessionstore
+          directly for session service construction — this is the outermost layer
+          and is the correct place to construct and inject infrastructure dependencies.
+
+      Ready for James (backend implementation of 01b).

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/neokn/agenticsystem/internal/mcpconfig"
+	"github.com/neokn/agenticsystem/internal/infra/mcpconfig"
 )
 
 // writeMCPFile writes content to baseDir/agents/<agentDir>/mcp.json, creating

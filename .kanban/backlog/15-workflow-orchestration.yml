@@ -1,0 +1,39 @@
+title: "Phase 2: Workflow 編排 — Sequential + Loop"
+assignee: neokn
+labels:
+  - backend
+  - architecture
+depends-on:
+  - 05-multi-agent-foundation
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+description: |
+  引入 ADK Workflow Agents，讓 Root 可以觸發多步驟任務流程。
+
+  新增兩個通用 workflow pattern：
+
+  1. Plan-Execute-Report (SequentialAgent)
+     通用複雜任務骨架：理解需求 → 擬定計畫 → 執行 → 總結回報
+     適用：技術調研、程式重構、文件撰寫等任何多步驟任務
+
+  2. Iterative Refinement (LoopAgent, max_iterations)
+     執行 → 檢查結果 → 不滿意就修正 → 重複
+     適用：寫 code 跑測試、寫文章修潤、等 API 完成（polling）
+
+  設計重點：
+    - State Layer：定義通用 state keys（user_intent, plan, artifacts, evaluation...）
+    - 每個 agent 像純函數：讀 state → 做事 → 寫 state
+    - Workflow pattern 是可重用的，不限特定 domain
+tasks:
+  - text: 設計通用 State Schema（domain-agnostic state keys）
+    done: false
+  - text: 實作 Plan-Execute-Report SequentialAgent
+    done: false
+  - text: 實作 Iterative Refinement LoopAgent
+    done: false
+  - text: Root prompt 加入 workflow 觸發邏輯
+    done: false
+  - text: 端到端測試：複雜任務走完整 workflow
+    done: false
+comments: []

@@ -1,0 +1,40 @@
+title: "Phase 4: 動態擴展 — MCP 動態 Agent + 自訂能力 + 長期記憶"
+assignee: neokn
+labels:
+  - backend
+  - architecture
+depends-on:
+  - 25-expanded-capabilities
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+description: |
+  讓系統可以動態擴展能力，邁向「AI 作業系統」。
+
+  三大方向：
+
+  1. MCP 動態 Agent
+     mcp.json 定義的 MCP server 自動包成 specialist sub-agent 掛到 Root，
+     使用者加設定就加能力，不需要改 Go code。
+
+  2. 使用者自訂 Agent
+     提供介面讓使用者定義 custom agent（prompt + tool 組合），
+     類似 GPTs 的概念但跑在本地。
+
+  3. 長期記憶強化
+     Root Agent 持續學習使用者偏好和工作模式，
+     結合 Weaviate 語意搜尋做跨 session 的知識累積。
+
+  目標：從「助理」→「可無限擴展的個人 AI 平台」
+tasks:
+  - text: MCP server 自動包裝為 specialist sub-agent
+    done: false
+  - text: 使用者自訂 agent 的設定格式與載入機制
+    done: false
+  - text: 長期記憶：跨 session 知識累積（Weaviate + memory plugin）
+    done: false
+  - text: Root prompt 動態感知可用能力（agent registry）
+    done: false
+  - text: Plugin 系統設計（第三方可擴展）
+    done: false
+comments: []

@@ -1,0 +1,38 @@
+title: "Phase 3: 擴展能力域 — 寫作/資料/排程/Parallel"
+assignee: neokn
+labels:
+  - backend
+depends-on:
+  - 15-workflow-orchestration
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+description: |
+  擴展助理的能力範圍到非工程領域，並引入 Parallel pattern。
+
+  新增 specialist agents：
+    - writing_agent：文件/信件/報告撰寫
+    - data_agent：資料分析/視覺化
+    - scheduler_agent：排程/提醒/cron
+    - comms_agent：Telegram/Slack/Email 操作
+
+  新增 workflow pattern：
+    - Multi-Perspective (ParallelAgent → Aggregate)
+      同一個問題多角度分析後彙整
+      適用：多面向 review、風險評估、多資料源查詢
+
+  目標：從工程助理 → 真正的萬能私人助理
+tasks:
+  - text: 建立 writing_agent（文件撰寫專家）
+    done: false
+  - text: 建立 data_agent（資料分析專家）
+    done: false
+  - text: 建立 scheduler_agent（排程/提醒）
+    done: false
+  - text: 建立 comms_agent（通訊管道操作）
+    done: false
+  - text: 實作 Multi-Perspective ParallelAgent pattern
+    done: false
+  - text: Root prompt 更新涵蓋所有新能力域
+    done: false
+comments: []

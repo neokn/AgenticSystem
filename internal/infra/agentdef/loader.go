@@ -1,6 +1,9 @@
 // Package agentdef loads agent definitions from agents/<name>/agent.prompt files.
 // Each agent is a directory under agents/ containing a dotprompt file that defines
 // the system instruction and optional frontmatter (model, input schema, etc.).
+//
+// Architecture: Infrastructure / Driven Adapter.
+// Implements domain.AgentLoader.
 package agentdef
 
 import (
@@ -10,9 +13,12 @@ import (
 	"strings"
 
 	dp "github.com/google/dotprompt/go/dotprompt"
+
+	"github.com/neokn/agenticsystem/internal/domain"
 )
 
 // Definition holds the parsed contents of an agent.prompt file.
+// Kept for internal use; the canonical domain type is domain.AgentDefinition.
 type Definition struct {
 	// Name is the agent directory name (e.g. "demo_agent").
 	Name string
@@ -23,6 +29,23 @@ type Definition struct {
 	// ModelID is the model from the frontmatter (e.g. "gemini-3-flash-preview").
 	// Empty if not specified in the prompt file.
 	ModelID string
+}
+
+// Loader implements domain.AgentLoader by reading dotprompt files.
+type Loader struct{}
+
+// Load reads agents/<name>/agent.prompt relative to baseDir and returns a
+// domain.AgentDefinition. baseDir is typically the project root.
+func (l *Loader) Load(baseDir, name string) (*domain.AgentDefinition, error) {
+	def, err := Load(baseDir, name)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.AgentDefinition{
+		Name:        def.Name,
+		Instruction: def.Instruction,
+		ModelID:     def.ModelID,
+	}, nil
 }
 
 // Load reads agents/<name>/agent.prompt relative to baseDir and returns a

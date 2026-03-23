@@ -16,8 +16,8 @@ import (
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/cmd/launcher/full"
 
-	"github.com/neokn/agenticsystem/internal/appwire"
-	"github.com/neokn/agenticsystem/internal/sessionstore"
+	"github.com/neokn/agenticsystem/internal/app/appwire"
+	"github.com/neokn/agenticsystem/internal/infra/sessionstore"
 )
 
 func run() error {

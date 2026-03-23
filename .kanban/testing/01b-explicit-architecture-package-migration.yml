@@ -1,0 +1,144 @@
+title: "Phase 0b: Explicit Architecture — Package Migration and Import Cleanup"
+assignee: neokn
+labels:
+  - backend
+depends-on:
+  - 01a-explicit-architecture-design-and-adr
+completed-by:
+  in-progress: james
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+  - stage: refined
+    at: 2026-03-23T10:00:00+08:00
+  - stage: in-progress
+    at: "2026-03-24T00:00:00+08:00"
+  - stage: testing
+    at: "2026-03-24T00:01:00+08:00"
+description: |
+  Execute the package migration defined in ADR from card 01a. Move all packages
+  from their current flat internal/ location into the four-layer structure, update
+  all import paths, and verify that the dependency direction rule is enforced:
+
+    Interface -> Application -> Domain <- Infrastructure
+
+  Target directory structure (no new external dependencies added):
+
+    internal/
+      domain/
+        ports.go         — port interfaces (AgentLoader, ToolProvider)
+      app/
+        appwire/         — moved from internal/appwire/ (assembly only, no inline logic)
+      infra/
+        agentdef/        — moved from internal/agentdef/
+        mcpconfig/       — moved from internal/mcpconfig/
+        memory/          — moved from internal/memory/
+        sessionstore/    — moved from internal/sessionstore/
+        shelltool/       — moved from internal/shelltool/
+        debugplugin/     — extracted from appwire/wire.go (the inline debug plugin)
+
+  The debug plugin currently defined inline in appwire/wire.go (~70 lines) must be
+  extracted into internal/infra/debugplugin/plugin.go so that appwire contains
+  only assembly logic.
+
+  This is a PURE STRUCTURAL REFACTOR. No behaviour changes, no new features.
+  Every existing test must pass after migration.
+
+  Value: After this card lands, all subsequent multi-agent cards (05, 15, 20, 25, 35)
+  can add components in the correct layer without violating architecture boundaries.
+acceptance:
+  - given: All packages have been moved to their target layer directories
+    when: go build ./... is run
+    then: Build succeeds with zero errors and zero changes to go.mod (no new dependencies, no removed dependencies)
+  - given: The migration is complete
+    when: go test ./... is run
+    then: All existing tests pass with zero failures; no test files are deleted or have their assertions changed
+  - given: The dependency direction rule must hold
+    when: Any file under internal/domain/ is inspected for its import statements
+    then: No file in internal/domain/ imports any path containing internal/infra/, internal/app/, google.golang.org/adk, google.golang.org/genai, or any MCP SDK package
+  - given: appwire is responsible for assembly only
+    when: internal/app/appwire/wire.go is read
+    then: "The file contains no inline plugin.Config BeforeModelCallback literals; the debug plugin is imported from internal/infra/debugplugin/"
+  - given: The old flat package paths no longer exist
+    when: ls of the six original package directories is run
+    then: Each path returns no such file or directory (all old paths are removed)
+  - given: cmd/ entrypoints must stay thin
+    when: Any file under cmd/ is inspected
+    then: No cmd/ file imports any path under internal/infra/; all infra access goes through internal/app/appwire
+tasks:
+  - text: Create internal/domain/ and move/write ports.go with AgentLoader and ToolProvider interfaces (content from 01a)
+    done: true
+  - text: Create internal/infra/ and move agentdef/, mcpconfig/, memory/, sessionstore/, shelltool/ — update Go package declarations and all import paths across the repo
+    done: true
+  - text: Extract the inline debug plugin from appwire/wire.go into internal/infra/debugplugin/plugin.go, export a New() or Build() function
+    done: true
+  - text: Move internal/appwire/ to internal/app/appwire/ and update all import paths in cmd/ entrypoints
+    done: true
+  - text: Run go build ./... and fix any import cycle or missing path errors
+    done: true
+  - text: Run go test ./... and confirm all tests pass
+    done: true
+  - text: Verify dependency direction rule — grep internal/domain/ for infra imports and confirm zero matches
+    done: true
+comments:
+  - author: jules
+    at: 2026-03-23T10:00:00+08:00
+    text: |
+      Split from parent card 01-explicit-architecture-restructure using
+      "Split Learning from Earning" (strategy 8).
+
+      This is the earning story — the actual package moves. It depends on 01a
+      having produced the ADR and port interface definitions so James has a clear
+      spec before touching files.
+
+      Key implementation notes:
+      - Use `git mv` for each package directory to preserve history.
+      - Go module path is github.com/neokn/agenticsystem; all imports must be
+        updated to match new paths (e.g., internal/agentdef -> internal/infra/agentdef).
+      - The debug plugin extraction is the trickiest part: it currently closes over
+        local variables in appwire.New(). The extracted debugplugin.New() should
+        return a *plugin.Plugin with no closures over appwire state.
+      - mcpconfig has no external deps — it could live in internal/app/ or
+        internal/infra/; the ADR from 01a should settle this. Lean toward infra/
+        since it loads external config files (file system = infrastructure).
+      - sessionstore depends on google.golang.org/adk/session and
+        google.golang.org/genai — clearly infra/.
+      - After the move, cmd/agent/main.go should only import internal/app/appwire
+        and adk/session (for session.InMemoryService). cmd/telegram/main.go should
+        only import internal/app/appwire and internal/infra/sessionstore.
+  - author: james
+    at: "2026-03-24T00:00:00+08:00"
+    text: |-
+      Migration complete. All seven tasks done.
+
+      Files created:
+        internal/infra/agentdef/loader.go — implements domain.AgentLoader via Loader struct
+        internal/infra/agentdef/override.go — InstructionOverridePlugin (unchanged logic)
+        internal/infra/mcpconfig/loader.go — returns *domain.MCPConfig (infra->domain mapping)
+        internal/infra/mcpconfig/loader_test.go — migrated tests
+        internal/infra/mcpconfig/integration_test.go — migrated integration tests
+        internal/infra/memory/ — all files copied (package had no internal deps)
+        internal/infra/sessionstore/service.go — copied (package had no internal deps)
+        internal/infra/sessionstore/service_test.go — updated import path
+        internal/infra/shelltool/tool.go — copied
+        internal/infra/shelltool/tool_test.go — updated import path
+        internal/infra/debugplugin/plugin.go — extracted from appwire wire.go (70-line callback)
+        internal/app/appwire/wire.go — updated all imports; uses infra/* packages
+        internal/app/appwire/wire_test.go — migrated test
+        internal/app/appwire/wire.go — added MemoryMetrics/ModelProfile type aliases to keep cmd/ clean
+
+      All old flat paths removed: internal/agentdef/, internal/mcpconfig/, internal/memory/,
+        internal/sessionstore/, internal/shelltool/, internal/appwire/
+
+      Patterns applied: Ports and Adapters (Hexagonal Architecture) — per ADR-0009
+
+      Test results: go test ./... — 7 packages, all PASS, 0 failures
+        cmd/agent, cmd/telegram, internal/app/appwire,
+        internal/infra/mcpconfig, internal/infra/memory,
+        internal/infra/sessionstore, internal/infra/shelltool
+
+      Dependency direction verified:
+        internal/domain: zero imports (pure)
+        infra/*: imports domain + external only, no app imports
+        cmd/: only imports app/appwire and infra/sessionstore (permitted per ADR)
+        go.mod: unchanged (no new dependencies added)

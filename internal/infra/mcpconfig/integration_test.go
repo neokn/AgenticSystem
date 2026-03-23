@@ -9,7 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/tool/mcptoolset"
 
-	"github.com/neokn/agenticsystem/internal/mcpconfig"
+	"github.com/neokn/agenticsystem/internal/infra/mcpconfig"
 )
 
 // weatherInput is the input type for the test MCP tool.

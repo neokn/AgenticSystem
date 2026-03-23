@@ -20,8 +20,8 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 
-	"github.com/neokn/agenticsystem/internal/appwire"
-	"github.com/neokn/agenticsystem/internal/sessionstore"
+	"github.com/neokn/agenticsystem/internal/app/appwire"
+	"github.com/neokn/agenticsystem/internal/infra/sessionstore"
 )
 
 func checkBotToken() error {

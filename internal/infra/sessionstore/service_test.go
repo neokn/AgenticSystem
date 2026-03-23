@@ -11,7 +11,7 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 
-	"github.com/neokn/agenticsystem/internal/sessionstore"
+	"github.com/neokn/agenticsystem/internal/infra/sessionstore"
 )
 
 // newTempDir creates a temporary directory for test session files.

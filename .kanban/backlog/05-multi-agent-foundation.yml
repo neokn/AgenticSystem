@@ -1,0 +1,56 @@
+title: "Phase 1: Multi-Agent 基礎設施 — Root + Specialists"
+assignee: neokn
+labels:
+  - backend
+  - architecture
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+description: |
+  將現有單一 LlmAgent 架構演進為 Root + Specialist Agents 樹狀結構。
+  Root Agent（現有 demo_agent 演進）作為萬能私人助理的大腦，
+  能判斷意圖後 transfer 到 specialist agent，specialist 完成後 escalate 回 Root。
+
+  目標架構：
+    Root Agent (LlmAgent — 私人助理大腦)
+      ├─ shell_agent   (LlmAgent — 系統操作/指令執行)
+      ├─ coder_agent   (LlmAgent — 程式碼理解/修改)
+      └─ search_agent  (LlmAgent — 知識檢索，掛 Weaviate tool)
+
+  設計原則：
+    - Root 自己能處理簡單對話，只在需要專業能力時 transfer
+    - 每個 specialist 只掛自己需要的 tool，降低 tool selection 複雜度
+    - Agent tree 由設定檔描述，不 hard-wire 在 Go code 裡
+    - ADK v1.0.0 的 llmagent.Config.SubAgents + agent transfer 機制
+
+  關鍵改動：
+    - 升級 go.mod → ADK v1.0.0
+    - 設計 agent tree 設定檔格式
+    - 改造 agentdef 支援載入多個 agent prompt
+    - 改造 appwire 建構 agent tree
+    - 撰寫 root/shell/coder/search agent 的 prompt
+    - Tool 拆分到各自的 specialist
+tasks:
+  - text: 升級 go.mod 鎖定 ADK v1.0.0
+    done: false
+  - text: 設計 agent tree 設定檔 schema（描述樹結構 + tool binding）
+    done: false
+  - text: 改造 agentdef 支援載入多個 agent definition
+    done: false
+  - text: 改造 appwire 遞迴建構 agent tree（Root + SubAgents）
+    done: false
+  - text: 建立 agents/root_agent/ 目錄與 prompt（私人助理人格 + specialist routing）
+    done: false
+  - text: 建立 agents/shell_agent/ 目錄與 prompt（掛 shell_exec tool）
+    done: false
+  - text: 建立 agents/coder_agent/ 目錄與 prompt（掛 file read/write tool）
+    done: false
+  - text: 建立 agents/search_agent/ 目錄與 prompt（掛 Weaviate toolset）
+    done: false
+  - text: MCP toolset 掛到對應 specialist 而非全掛 root
+    done: false
+  - text: 驗證 transfer + escalate 行為（Root ↔ Specialist 來回）
+    done: false
+  - text: 加入測試
+    done: false
+comments: []

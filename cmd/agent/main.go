@@ -30,8 +30,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 
-	"github.com/neokn/agenticsystem/internal/appwire"
-	"github.com/neokn/agenticsystem/internal/memory"
+	"github.com/neokn/agenticsystem/internal/app/appwire"
 )
 
 // cliConfig holds parsed command-line flags.
@@ -65,8 +64,8 @@ func parseFlags(args []string) (cliConfig, error) {
 // buildOOMTestProfile returns a ModelProfile with an artificially small
 // context window for triggering the OOM handler in automated tests.
 // Per acceptance criterion: context_window_tokens=2000.
-func buildOOMTestProfile() memory.ModelProfile {
-	return memory.ModelProfile{
+func buildOOMTestProfile() appwire.ModelProfile {
+	return appwire.ModelProfile{
 		ModelID:             "gemini-2.0-flash",
 		Provider:            "google",
 		ContextWindowTokens: 2000,
@@ -82,7 +81,7 @@ func buildOOMTestProfile() memory.ModelProfile {
 //	countTokens_api_call_count: <int>
 //	compress_cost_usd: <6 decimal float>
 //	oom_event_count: <int>
-func formatMetrics(snap memory.MemoryMetrics, usageRatioCurve []float64, compressCostUSD float64) string {
+func formatMetrics(snap appwire.MemoryMetrics, usageRatioCurve []float64, compressCostUSD float64) string {
 	// Format usage_ratio_curve as comma-separated 6-decimal floats.
 	curveValues := make([]string, 0, len(usageRatioCurve))
 	for _, v := range usageRatioCurve {

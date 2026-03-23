@@ -1,0 +1,57 @@
+title: "Phase 0: Explicit Architecture 重構 — Hexagonal / Ports & Adapters"
+assignee: neokn
+labels:
+  - backend
+  - architecture
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+  - stage: refined
+    at: "2026-03-23T10:00:00+08:00"
+    note: superseded — split into 01a and 01b
+description: |
+  在推進 multi-agent 之前，先用 Explicit Architecture（Hexagonal / Ports & Adapters /
+  Clean Architecture）重構現有專案結構，建立清晰的層級邊界。
+
+  這張卡是所有後續 Phase 的地基 — 沒有乾淨的分層，multi-agent 的複雜度
+  會讓 codebase 迅速失控。
+
+  目標：
+    - Domain Layer：agent 定義、state schema、workflow 合約（純邏輯，零外部依賴）
+    - Application Layer：use case orchestration、appwire（組裝，不含業務邏輯）
+    - Infrastructure Layer：ADK adapter、Gemini client、session store、MCP、shelltool
+    - Interface Layer：cmd/agent、cmd/telegram、cmd/web（薄入口）
+
+  現狀問題：
+    - internal/ 下的 package 沒有明確的層級歸屬
+    - appwire 同時做組裝和業務邏輯（debug plugin inline）
+    - agentdef/mcpconfig/shelltool/memory 全部平鋪在 internal/，沒有分層
+    - 外部依賴（ADK、genai、MCP SDK）直接散落在各處，沒有 Port 隔離
+
+  重構策略：
+    - 先畫出目標目錄結構
+    - 定義 Port interfaces（domain 對外部的合約）
+    - 搬移現有 package 到正確的層級
+    - 確保依賴方向：Interface → Application → Domain ← Infrastructure
+    - 不改功能，純結構重構，所有測試必須繼續通過
+tasks:
+  - text: 分析現有 package 的依賴關係圖
+    done: false
+  - text: 設計目標目錄結構（domain/app/infra/interface 四層）
+    done: false
+  - text: 定義 Port interfaces（AgentLoader, SessionStore, ToolProvider, MemoryService...）
+    done: false
+  - text: 撰寫 ADR 記錄架構決策
+    done: false
+  - text: 搬移 package 到目標結構
+    done: false
+  - text: 確保依賴方向正確（無反向依賴）
+    done: false
+  - text: 全部測試通過
+    done: false
+comments:
+  - author: jules
+    at: "2026-03-23T10:00:00+08:00"
+    text: 'Card split into two independently deliverable stories using Split Learning from Earning (strategy 8) and Split by Examples of Usefulness (strategy 4). This parent card is superseded by 01a and 01b. 01a (design + ADR) must be completed and approved by Jensen before 01b (package migration) begins. Splitting rationale: the original card mixed design decisions (which require architecture review) with implementation work (which can be executed independently once the design is locked). Keeping them together would have forced Jensen to review mid-flight code changes alongside conceptual architecture decisions. The split also keeps the blast radius of each change small: 01a produces zero code changes; 01b is a pure mechanical migration with a clear before/after invariant.'
+completed-by:
+  backlog: jules

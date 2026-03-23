@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/neokn/agenticsystem/internal/shelltool"
+	"github.com/neokn/agenticsystem/internal/infra/shelltool"
 )
 
 // Test that Handler returns stdout and exit code 0 for a successful command.
