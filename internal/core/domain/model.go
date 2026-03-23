@@ -4,9 +4,9 @@
 //
 // Dependency rule (see docs/adr/0009-explicit-architecture-layer-structure.md):
 //
-//	internal/domain MUST NOT import:
+//	internal/core/domain MUST NOT import:
 //	  - internal/infra/*
-//	  - internal/app/*
+//	  - internal/core/application
 //	  - google.golang.org/adk
 //	  - google.golang.org/genai
 //	  - github.com/google/dotprompt
@@ -30,22 +30,9 @@ type AgentDefinition struct {
 	ModelID string
 }
 
-// AgentLoader is the port for loading agent definitions from the agent store.
-// The Application Layer uses this interface; the Infrastructure Layer implements
-// it (see internal/infra/agentdef).
-//
-// Load reads the agent definition identified by (baseDir, name) and returns an
-// AgentDefinition. baseDir is typically the project root; name is the
-// subdirectory under agents/ (e.g. "demo_agent").
-//
-// Returns an error if the agent definition cannot be found or parsed.
-type AgentLoader interface {
-	Load(baseDir, name string) (*AgentDefinition, error)
-}
-
 // MCPServerConfig describes a single MCP server subprocess.
 // This is the domain representation of one MCP server entry — isomorphic to
-// internal/infra/mcpconfig.ServerConfig but owned by the domain layer so that
+// internal/infra/config/mcpconfig.ServerConfig but owned by the domain layer so that
 // port signatures do not import infrastructure types.
 type MCPServerConfig struct {
 	// Name is the logical name of the server (used in error messages).
@@ -64,7 +51,7 @@ type MCPServerConfig struct {
 
 // MCPConfig is the domain representation of an MCP server configuration file.
 // The Application Layer passes this to the ToolProvider port (defined in
-// internal/app/ports.go); the Infrastructure adapter (internal/infra/mcpconfig)
+// internal/core/port/tool.go); the Infrastructure adapter (internal/infra/config/mcpconfig)
 // translates its own type to this type before returning it to the app layer.
 type MCPConfig struct {
 	// Servers is the ordered list of MCP server entries.

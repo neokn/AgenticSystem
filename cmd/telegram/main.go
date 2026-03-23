@@ -20,8 +20,8 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 
-	"github.com/neokn/agenticsystem/internal/app/appwire"
-	"github.com/neokn/agenticsystem/internal/infra/sessionstore"
+	"github.com/neokn/agenticsystem/internal/core/application"
+	"github.com/neokn/agenticsystem/internal/infra/persistence/jsonl"
 )
 
 func checkBotToken() error {
@@ -42,11 +42,11 @@ func runBot(ctx context.Context) error {
 	botToken := os.Getenv("TELEGRAM_BOT_TOKEN")
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 
-	app, err := appwire.New(ctx, apiKey, appwire.Config{
+	app, err := application.New(ctx, apiKey, application.Config{
 		AgentDir:       ".",
 		AgentName:      "demo_agent",
 		AppName:        "telegram_bot_app",
-		SessionService: sessionstore.NewJSONLService("data/sessions"),
+		SessionService: jsonl.NewJSONLService("data/sessions"),
 	})
 	if err != nil {
 		return fmt.Errorf("assembling app: %w", err)

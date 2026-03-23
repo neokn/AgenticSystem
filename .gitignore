@@ -2,7 +2,7 @@
 data/
 .claude/
 
-# compiled binaries
-agent
-telegram
-web
+# compiled binaries (root-level only)
+/agent
+/telegram
+/web

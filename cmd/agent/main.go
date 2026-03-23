@@ -1,6 +1,6 @@
 // Package main implements the demo agent CLI for end-to-end verification of
 // the AgenticSystem context-memory manager. It assembles all components from
-// internal/memory/ and wires them into an ADK Runner with a real LLMAgent.
+// internal/infra/memory/ and wires them into an ADK Runner with a real LLMAgent.
 //
 // Usage:
 //
@@ -30,7 +30,7 @@ import (
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 
-	"github.com/neokn/agenticsystem/internal/app/appwire"
+	"github.com/neokn/agenticsystem/internal/core/application"
 )
 
 // cliConfig holds parsed command-line flags.
@@ -64,8 +64,8 @@ func parseFlags(args []string) (cliConfig, error) {
 // buildOOMTestProfile returns a ModelProfile with an artificially small
 // context window for triggering the OOM handler in automated tests.
 // Per acceptance criterion: context_window_tokens=2000.
-func buildOOMTestProfile() appwire.ModelProfile {
-	return appwire.ModelProfile{
+func buildOOMTestProfile() application.ModelProfile {
+	return application.ModelProfile{
 		ModelID:             "gemini-2.0-flash",
 		Provider:            "google",
 		ContextWindowTokens: 2000,
@@ -81,7 +81,7 @@ func buildOOMTestProfile() appwire.ModelProfile {
 //	countTokens_api_call_count: <int>
 //	compress_cost_usd: <6 decimal float>
 //	oom_event_count: <int>
-func formatMetrics(snap appwire.MemoryMetrics, usageRatioCurve []float64, compressCostUSD float64) string {
+func formatMetrics(snap application.MemoryMetrics, usageRatioCurve []float64, compressCostUSD float64) string {
 	// Format usage_ratio_curve as comma-separated 6-decimal floats.
 	curveValues := make([]string, 0, len(usageRatioCurve))
 	for _, v := range usageRatioCurve {
@@ -128,7 +128,7 @@ func writeMetricsToFile(path, content string) error {
 func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writer, errOutput io.Writer) error {
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 
-	app, err := appwire.New(ctx, apiKey, appwire.Config{
+	app, err := application.New(ctx, apiKey, application.Config{
 		AgentDir:       ".",
 		AgentName:      "demo_agent",
 		AppName:        "demo_agent_app",

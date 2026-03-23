@@ -1,4 +1,4 @@
-// Package shelltool provides a shell command execution tool for the LLM agent.
+// Package shell provides a shell command execution tool for the LLM agent.
 // It implements the handler function wired into ADK via functiontool.New.
 //
 // Architecture: Infrastructure / Driven Adapter.
@@ -6,7 +6,7 @@
 // implied by ADK's FunctionTool mechanism. The core handler accepts a plain
 // context.Context for testability; the ADK adapter (ToolHandlerFunc) wraps it
 // with the tool.Context signature expected by functiontool.New.
-package shelltool
+package shell
 
 import (
 	"bytes"

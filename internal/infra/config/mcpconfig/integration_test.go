@@ -9,7 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/adk/tool/mcptoolset"
 
-	"github.com/neokn/agenticsystem/internal/infra/mcpconfig"
+	"github.com/neokn/agenticsystem/internal/infra/config/mcpconfig"
 )
 
 // weatherInput is the input type for the test MCP tool.
@@ -39,7 +39,7 @@ func Test_mcptoolset_construction_should_succeed_when_in_memory_server_is_runnin
 		t.Fatalf("server.Connect: %v", err)
 	}
 
-	// Act: build a toolset using the client transport (mirrors what appwire does
+	// Act: build a toolset using the client transport (mirrors what application does
 	// after reading mcpconfig — substituting CommandTransport with the in-memory
 	// transport to avoid subprocess requirements in CI).
 	ts, err := mcptoolset.New(mcptoolset.Config{
@@ -57,7 +57,7 @@ func Test_mcptoolset_construction_should_succeed_when_in_memory_server_is_runnin
 
 // Test_mcpconfig_Load_fields_should_match_values_used_by_appwire_for_exec_Cmd
 // verifies that mcpconfig.Load round-trips config fields correctly — these are
-// the exact values appwire uses to build exec.Cmd and CommandTransport.
+// the exact values application uses to build exec.Cmd and CommandTransport.
 func Test_mcpconfig_Load_fields_should_match_values_used_by_appwire_for_exec_Cmd(t *testing.T) {
 	// Arrange
 	base := writeMCPFile(t, "demo_agent", `{

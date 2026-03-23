@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/neokn/agenticsystem/internal/domain"
+	"github.com/neokn/agenticsystem/internal/core/domain"
 )
 
 // serverConfig holds the configuration for a single MCP server (JSON form).

@@ -46,8 +46,8 @@ func InstructionOverridePlugin(instruction string) (*plugin.Plugin, error) {
 				req.Config.SystemInstruction = nil
 			} else {
 				req.Config.SystemInstruction = &genai.Content{
-				Parts: []*genai.Part{{Text: instruction}},
-			}
+					Parts: []*genai.Part{{Text: instruction}},
+				}
 			}
 			return nil, nil
 		},

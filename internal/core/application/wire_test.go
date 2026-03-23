@@ -1,5 +1,5 @@
-// Package appwire white-box tests for internal helpers.
-package appwire
+// Package application white-box tests for internal helpers.
+package application
 
 import (
 	"sort"

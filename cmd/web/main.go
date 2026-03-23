@@ -16,8 +16,8 @@ import (
 	"google.golang.org/adk/cmd/launcher"
 	"google.golang.org/adk/cmd/launcher/full"
 
-	"github.com/neokn/agenticsystem/internal/app/appwire"
-	"github.com/neokn/agenticsystem/internal/infra/sessionstore"
+	"github.com/neokn/agenticsystem/internal/core/application"
+	"github.com/neokn/agenticsystem/internal/infra/persistence/jsonl"
 )
 
 func run() error {
@@ -30,11 +30,11 @@ func run() error {
 
 	ctx := context.Background()
 
-	app, err := appwire.New(ctx, apiKey, appwire.Config{
+	app, err := application.New(ctx, apiKey, application.Config{
 		AgentDir:       ".",
 		AgentName:      "demo_agent",
 		AppName:        "web_app",
-		SessionService: sessionstore.NewJSONLService("data/sessions"),
+		SessionService: jsonl.NewJSONLService("data/sessions"),
 	})
 	if err != nil {
 		return fmt.Errorf("assembling app: %w", err)

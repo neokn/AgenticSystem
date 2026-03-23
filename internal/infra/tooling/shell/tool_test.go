@@ -1,22 +1,22 @@
-// Package shelltool_test tests the shell tool handler.
-package shelltool_test
+// Package shell_test tests the shell tool handler.
+package shell_test
 
 import (
 	"context"
 	"strings"
 	"testing"
 
-	"github.com/neokn/agenticsystem/internal/infra/shelltool"
+	"github.com/neokn/agenticsystem/internal/infra/tooling/shell"
 )
 
 // Test that Handler returns stdout and exit code 0 for a successful command.
 func Test_Handler_should_return_stdout_and_zero_exit_code_when_command_succeeds(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	input := shelltool.ShellInput{Command: "echo hello"}
+	input := shell.ShellInput{Command: "echo hello"}
 
 	// Act
-	output, err := shelltool.Handler(ctx, input)
+	output, err := shell.Handler(ctx, input)
 
 	// Assert
 	if err != nil {
@@ -34,10 +34,10 @@ func Test_Handler_should_return_stdout_and_zero_exit_code_when_command_succeeds(
 func Test_Handler_should_return_nonzero_exit_code_when_command_fails(t *testing.T) {
 	// Arrange
 	ctx := context.Background()
-	input := shelltool.ShellInput{Command: "exit 1"}
+	input := shell.ShellInput{Command: "exit 1"}
 
 	// Act
-	output, err := shelltool.Handler(ctx, input)
+	output, err := shell.Handler(ctx, input)
 
 	// Assert
 	if err != nil {
@@ -53,10 +53,10 @@ func Test_Handler_should_truncate_output_when_it_exceeds_8192_bytes(t *testing.T
 	// Arrange
 	ctx := context.Background()
 	// Generate more than 8192 bytes of output using base64-encoded random bytes.
-	input := shelltool.ShellInput{Command: "head -c 10000 /dev/urandom | base64"}
+	input := shell.ShellInput{Command: "head -c 10000 /dev/urandom | base64"}
 
 	// Act
-	output, err := shelltool.Handler(ctx, input)
+	output, err := shell.Handler(ctx, input)
 
 	// Assert
 	if err != nil {
@@ -76,10 +76,10 @@ func Test_Handler_should_set_error_field_when_context_is_cancelled(t *testing.T)
 	// Arrange
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately to simulate timeout
-	input := shelltool.ShellInput{Command: "sleep 10"}
+	input := shell.ShellInput{Command: "sleep 10"}
 
 	// Act
-	output, err := shelltool.Handler(ctx, input)
+	output, err := shell.Handler(ctx, input)
 
 	// Assert — either an error is returned or the Error field is populated.
 	if err == nil && output.Error == "" {

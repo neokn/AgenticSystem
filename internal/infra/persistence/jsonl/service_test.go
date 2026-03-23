@@ -1,4 +1,4 @@
-package sessionstore_test
+package jsonl_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 
-	"github.com/neokn/agenticsystem/internal/infra/sessionstore"
+	"github.com/neokn/agenticsystem/internal/infra/persistence/jsonl"
 )
 
 // newTempDir creates a temporary directory for test session files.
@@ -28,7 +28,7 @@ func newTempDir(t *testing.T) string {
 // newService creates a JSONLService backed by a temp directory.
 func newService(t *testing.T) session.Service {
 	t.Helper()
-	return sessionstore.NewJSONLService(newTempDir(t))
+	return jsonl.NewJSONLService(newTempDir(t))
 }
 
 // createSession is a test helper that creates a session and returns it.
@@ -123,7 +123,7 @@ func TestCreate_should_error_when_user_id_empty(t *testing.T) {
 
 func TestCreate_should_persist_meta_file(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 
 	resp, err := svc.Create(context.Background(), &session.CreateRequest{
 		AppName:   "myapp",
@@ -142,7 +142,7 @@ func TestCreate_should_persist_meta_file(t *testing.T) {
 
 func TestCreate_should_persist_empty_jsonl_file(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 
 	resp, err := svc.Create(context.Background(), &session.CreateRequest{
 		AppName:   "myapp",
@@ -196,7 +196,7 @@ func TestGet_should_return_session_after_create(t *testing.T) {
 
 func TestAppendEvent_should_persist_and_replay_events(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 	sess := createSession(t, svc, "myapp", "user1", "sess1")
 
 	ev1 := makeTextEvent("user", "hello")
@@ -210,7 +210,7 @@ func TestAppendEvent_should_persist_and_replay_events(t *testing.T) {
 	}
 
 	// Simulate restart: create a new service pointing to the same directory
-	svc2 := sessionstore.NewJSONLService(dir)
+	svc2 := jsonl.NewJSONLService(dir)
 
 	resp, err := svc2.Get(context.Background(), &session.GetRequest{
 		AppName:   "myapp",
@@ -257,7 +257,7 @@ func TestAppendEvent_should_skip_partial_events(t *testing.T) {
 
 func TestGet_should_skip_corrupt_last_line_and_log_warn(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 	sess := createSession(t, svc, "myapp", "user1", "sess1")
 
 	ev := makeTextEvent("user", "good event")
@@ -347,7 +347,7 @@ func TestList_should_return_sessions_matching_app_and_user(t *testing.T) {
 
 func TestDelete_should_remove_session_files(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 	createSession(t, svc, "myapp", "user1", "sess1")
 
 	err := svc.Delete(context.Background(), &session.DeleteRequest{
@@ -395,7 +395,7 @@ func TestGet_should_apply_num_recent_events_filter(t *testing.T) {
 
 func TestAppendEvent_should_store_full_event_but_replay_only_content(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 	sess := createSession(t, svc, "myapp", "user1", "sess1")
 
 	ev := makeTextEvent("agent", "hello world")
@@ -418,7 +418,7 @@ func TestAppendEvent_should_store_full_event_but_replay_only_content(t *testing.
 	}
 
 	// But replay should only reconstruct Content (role + parts).
-	svc2 := sessionstore.NewJSONLService(dir)
+	svc2 := jsonl.NewJSONLService(dir)
 	resp, err := svc2.Get(context.Background(), &session.GetRequest{
 		AppName: "myapp", UserID: "user1", SessionID: "sess1",
 	})
@@ -436,7 +436,7 @@ func TestAppendEvent_should_store_full_event_but_replay_only_content(t *testing.
 
 func TestAppendEvent_should_strip_thought_signatures(t *testing.T) {
 	dir := newTempDir(t)
-	svc := sessionstore.NewJSONLService(dir)
+	svc := jsonl.NewJSONLService(dir)
 	sess := createSession(t, svc, "myapp", "user1", "sess1")
 
 	ev := makeTextEvent("agent", "thinking reply")

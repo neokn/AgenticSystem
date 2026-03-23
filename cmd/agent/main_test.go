@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/neokn/agenticsystem/internal/app/appwire"
+	"github.com/neokn/agenticsystem/internal/core/application"
 )
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ func Test_should_use_default_flag_values_when_no_flags_provided(t *testing.T) {
 // returns the exact expected format from the acceptance criteria.
 func Test_should_format_metrics_with_colon_separated_fields(t *testing.T) {
 	// Arrange
-	snap := appwire.MemoryMetrics{
+	snap := application.MemoryMetrics{
 		CountTokensAPICallCount: 3,
 		CompressTriggerCount:    2,
 		OOMEventCount:           0,
@@ -140,7 +140,7 @@ func Test_should_format_metrics_with_colon_separated_fields(t *testing.T) {
 // usage ratio curve is formatted as an empty value.
 func Test_should_format_empty_usage_ratio_curve_as_empty_list(t *testing.T) {
 	// Arrange
-	snap := appwire.MemoryMetrics{}
+	snap := application.MemoryMetrics{}
 	var usageRatioCurve []float64
 
 	// Act
@@ -155,7 +155,7 @@ func Test_should_format_empty_usage_ratio_curve_as_empty_list(t *testing.T) {
 // should_format_compress_cost_usd_with_6_decimal_places verifies precision.
 func Test_should_format_compress_cost_usd_with_6_decimal_places(t *testing.T) {
 	// Arrange
-	snap := appwire.MemoryMetrics{}
+	snap := application.MemoryMetrics{}
 	cost := 0.123456789
 
 	// Act
@@ -202,7 +202,7 @@ func Test_should_write_metrics_to_file_when_metrics_out_flag_is_set(t *testing.T
 	f.Close()
 	defer os.Remove(f.Name())
 
-	snap := appwire.MemoryMetrics{
+	snap := application.MemoryMetrics{
 		CompressTriggerCount:    1,
 		CountTokensAPICallCount: 2,
 		OOMEventCount:           0,
@@ -230,7 +230,7 @@ func Test_should_write_metrics_to_file_when_metrics_out_flag_is_set(t *testing.T
 func Test_should_print_metrics_to_writer(t *testing.T) {
 	// Arrange
 	var buf bytes.Buffer
-	snap := appwire.MemoryMetrics{
+	snap := application.MemoryMetrics{
 		CompressTriggerCount:    3,
 		CountTokensAPICallCount: 5,
 		OOMEventCount:           1,

@@ -1,4 +1,4 @@
-// Package sessionstore provides a file-backed session.Service implementation
+// Package jsonl provides a file-backed session.Service implementation
 // that stores each session as a JSONL file (one event per line) with a JSON
 // metadata sidecar.
 //
@@ -8,7 +8,7 @@
 //	<dir>/<session-id>.meta.json  — session identity sidecar (for List queries)
 //
 // See docs/adr/0007-jsonl-session-store.md for design rationale.
-package sessionstore
+package jsonl
 
 import (
 	"bufio"

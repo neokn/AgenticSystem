@@ -1,9 +1,9 @@
-// Package debugplugin provides an ADK plugin that dumps the full LLM request to
+// Package debug provides an ADK plugin that dumps the full LLM request to
 // stderr before each model call. It is an infrastructure concern (debug telemetry)
-// extracted from the assembly layer so appwire contains only assembly logic.
+// extracted from the assembly layer so the application package contains only assembly logic.
 //
 // Architecture: Infrastructure / Driven Adapter.
-package debugplugin
+package debug
 
 import (
 	"encoding/json"

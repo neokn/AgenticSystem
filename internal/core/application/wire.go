@@ -1,7 +1,7 @@
-// Package appwire assembles the shared application core used by all entrypoints
+// Package application assembles the shared application core used by all entrypoints
 // (CLI, Web UI, Telegram, etc.). Each entrypoint only provides the I/O layer;
 // the agent, plugins, tools, and runner are wired identically.
-package appwire
+package application
 
 import (
 	"context"
@@ -22,19 +22,19 @@ import (
 	"google.golang.org/adk/tool/functiontool"
 	"google.golang.org/adk/tool/mcptoolset"
 
-	"github.com/neokn/agenticsystem/internal/infra/agentdef"
-	"github.com/neokn/agenticsystem/internal/infra/debugplugin"
-	"github.com/neokn/agenticsystem/internal/infra/mcpconfig"
-	"github.com/neokn/agenticsystem/internal/infra/memory"
-	"github.com/neokn/agenticsystem/internal/infra/shelltool"
+	"github.com/neokn/agenticsystem/internal/infra/config/agentdef"
+	"github.com/neokn/agenticsystem/internal/infra/config/mcpconfig"
+	"github.com/neokn/agenticsystem/internal/infra/observe/debug"
+	"github.com/neokn/agenticsystem/internal/infra/observe/memory"
+	"github.com/neokn/agenticsystem/internal/infra/tooling/shell"
 )
 
 // MemoryMetrics is a re-export of memory.MemoryMetrics so that callers of
-// appwire do not need to import internal/infra/memory directly.
+// application do not need to import internal/infra/observe/memory directly.
 type MemoryMetrics = memory.MemoryMetrics
 
 // ModelProfile is a re-export of memory.ModelProfile so that callers of
-// appwire do not need to import internal/infra/memory directly.
+// application do not need to import internal/infra/observe/memory directly.
 type ModelProfile = memory.ModelProfile
 
 // App holds the assembled application core. Entrypoints use the Runner and
@@ -69,6 +69,7 @@ type Config struct {
 // and runner. Returns an App ready for the entrypoint to drive.
 func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 	// --- Load agent definition ---
+	// TODO(card-05): inject domain.AgentLoader via Config instead of constructing here
 	loader := &agentdef.Loader{}
 	def, err := loader.Load(cfg.AgentDir, cfg.AgentName)
 	if err != nil {
@@ -82,6 +83,7 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 	}
 
 	// --- Build MCP toolsets ---
+	// TODO(card-05): inject app.ToolProvider via Config instead of building inline
 	var toolsets []tool.Toolset
 	if mcpCfg != nil {
 		for _, srv := range mcpCfg.Servers {
@@ -140,7 +142,7 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 		Name:                "shell_exec",
 		Description:         "Execute a shell command and return stdout and exit code.",
 		RequireConfirmation: false,
-	}, shelltool.ToolHandlerFunc)
+	}, shell.ToolHandlerFunc)
 	if err != nil {
 		return nil, fmt.Errorf("appwire: creating shell tool: %w", err)
 	}
@@ -159,7 +161,7 @@ func New(ctx context.Context, apiKey string, cfg Config) (*App, error) {
 	}
 
 	// --- Debug plugin: dump the final LLM request (no truncation) ---
-	debugPl, err := debugplugin.New()
+	debugPl, err := debug.New()
 	if err != nil {
 		return nil, fmt.Errorf("appwire: creating debug plugin: %w", err)
 	}

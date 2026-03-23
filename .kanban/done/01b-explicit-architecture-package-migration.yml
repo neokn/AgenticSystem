@@ -1,0 +1,261 @@
+title: "Phase 0b: Explicit Architecture — Package Migration and Import Cleanup"
+assignee: neokn
+labels:
+  - backend
+depends-on:
+  - 01a-explicit-architecture-design-and-adr
+completed-by:
+  in-progress: james
+  testing: judge
+  review: jobs
+history:
+  - stage: backlog
+    at: 2026-03-23T00:00:00+08:00
+  - stage: refined
+    at: 2026-03-23T10:00:00+08:00
+  - stage: in-progress
+    at: "2026-03-24T00:00:00+08:00"
+  - stage: testing
+    at: "2026-03-24T00:01:00+08:00"
+  - stage: review
+    at: "2026-03-24T12:00:00+08:00"
+  - stage: done
+    at: "2026-03-24T13:30:00+08:00"
+description: |
+  Execute the package migration defined in ADR from card 01a. Move all packages
+  from their current flat internal/ location into the four-layer structure, update
+  all import paths, and verify that the dependency direction rule is enforced:
+
+    Interface -> Application -> Domain <- Infrastructure
+
+  Target directory structure (no new external dependencies added):
+
+    internal/
+      domain/
+        ports.go         — port interfaces (AgentLoader, ToolProvider)
+      app/
+        appwire/         — moved from internal/appwire/ (assembly only, no inline logic)
+      infra/
+        agentdef/        — moved from internal/agentdef/
+        mcpconfig/       — moved from internal/mcpconfig/
+        memory/          — moved from internal/memory/
+        sessionstore/    — moved from internal/sessionstore/
+        shelltool/       — moved from internal/shelltool/
+        debugplugin/     — extracted from appwire/wire.go (the inline debug plugin)
+
+  The debug plugin currently defined inline in appwire/wire.go (~70 lines) must be
+  extracted into internal/infra/debugplugin/plugin.go so that appwire contains
+  only assembly logic.
+
+  This is a PURE STRUCTURAL REFACTOR. No behaviour changes, no new features.
+  Every existing test must pass after migration.
+
+  Value: After this card lands, all subsequent multi-agent cards (05, 15, 20, 25, 35)
+  can add components in the correct layer without violating architecture boundaries.
+acceptance:
+  - given: All packages have been moved to their target layer directories
+    when: go build ./... is run
+    then: Build succeeds with zero errors and zero changes to go.mod (no new dependencies, no removed dependencies)
+  - given: The migration is complete
+    when: go test ./... is run
+    then: All existing tests pass with zero failures; no test files are deleted or have their assertions changed
+  - given: The dependency direction rule must hold
+    when: Any file under internal/domain/ is inspected for its import statements
+    then: No file in internal/domain/ imports any path containing internal/infra/, internal/app/, google.golang.org/adk, google.golang.org/genai, or any MCP SDK package
+  - given: appwire is responsible for assembly only
+    when: internal/app/appwire/wire.go is read
+    then: "The file contains no inline plugin.Config BeforeModelCallback literals; the debug plugin is imported from internal/infra/debugplugin/"
+  - given: The old flat package paths no longer exist
+    when: ls of the six original package directories is run
+    then: Each path returns no such file or directory (all old paths are removed)
+  - given: cmd/ entrypoints must stay thin
+    when: Any file under cmd/ is inspected
+    then: No cmd/ file imports any path under internal/infra/; all infra access goes through internal/app/appwire
+tasks:
+  - text: Create internal/domain/ and move/write ports.go with AgentLoader and ToolProvider interfaces (content from 01a)
+    done: true
+  - text: Create internal/infra/ and move agentdef/, mcpconfig/, memory/, sessionstore/, shelltool/ — update Go package declarations and all import paths across the repo
+    done: true
+  - text: Extract the inline debug plugin from appwire/wire.go into internal/infra/debugplugin/plugin.go, export a New() or Build() function
+    done: true
+  - text: Move internal/appwire/ to internal/app/appwire/ and update all import paths in cmd/ entrypoints
+    done: true
+  - text: Run go build ./... and fix any import cycle or missing path errors
+    done: true
+  - text: Run go test ./... and confirm all tests pass
+    done: true
+  - text: Verify dependency direction rule — grep internal/domain/ for infra imports and confirm zero matches
+    done: true
+comments:
+  - author: jules
+    at: 2026-03-23T10:00:00+08:00
+    text: |
+      Split from parent card 01-explicit-architecture-restructure using
+      "Split Learning from Earning" (strategy 8).
+
+      This is the earning story — the actual package moves. It depends on 01a
+      having produced the ADR and port interface definitions so James has a clear
+      spec before touching files.
+
+      Key implementation notes:
+      - Use `git mv` for each package directory to preserve history.
+      - Go module path is github.com/neokn/agenticsystem; all imports must be
+        updated to match new paths (e.g., internal/agentdef -> internal/infra/agentdef).
+      - The debug plugin extraction is the trickiest part: it currently closes over
+        local variables in appwire.New(). The extracted debugplugin.New() should
+        return a *plugin.Plugin with no closures over appwire state.
+      - mcpconfig has no external deps — it could live in internal/app/ or
+        internal/infra/; the ADR from 01a should settle this. Lean toward infra/
+        since it loads external config files (file system = infrastructure).
+      - sessionstore depends on google.golang.org/adk/session and
+        google.golang.org/genai — clearly infra/.
+      - After the move, cmd/agent/main.go should only import internal/app/appwire
+        and adk/session (for session.InMemoryService). cmd/telegram/main.go should
+        only import internal/app/appwire and internal/infra/sessionstore.
+  - author: james
+    at: "2026-03-24T00:00:00+08:00"
+    text: |-
+      Migration complete. All seven tasks done.
+
+      Files created:
+        internal/infra/agentdef/loader.go — implements domain.AgentLoader via Loader struct
+        internal/infra/agentdef/override.go — InstructionOverridePlugin (unchanged logic)
+        internal/infra/mcpconfig/loader.go — returns *domain.MCPConfig (infra->domain mapping)
+        internal/infra/mcpconfig/loader_test.go — migrated tests
+        internal/infra/mcpconfig/integration_test.go — migrated integration tests
+        internal/infra/memory/ — all files copied (package had no internal deps)
+        internal/infra/sessionstore/service.go — copied (package had no internal deps)
+        internal/infra/sessionstore/service_test.go — updated import path
+        internal/infra/shelltool/tool.go — copied
+        internal/infra/shelltool/tool_test.go — updated import path
+        internal/infra/debugplugin/plugin.go — extracted from appwire wire.go (70-line callback)
+        internal/app/appwire/wire.go — updated all imports; uses infra/* packages
+        internal/app/appwire/wire_test.go — migrated test
+        internal/app/appwire/wire.go — added MemoryMetrics/ModelProfile type aliases to keep cmd/ clean
+
+      All old flat paths removed: internal/agentdef/, internal/mcpconfig/, internal/memory/,
+        internal/sessionstore/, internal/shelltool/, internal/appwire/
+
+      Patterns applied: Ports and Adapters (Hexagonal Architecture) — per ADR-0009
+
+      Test results: go test ./... — 7 packages, all PASS, 0 failures
+        cmd/agent, cmd/telegram, internal/app/appwire,
+        internal/infra/mcpconfig, internal/infra/memory,
+        internal/infra/sessionstore, internal/infra/shelltool
+
+      Dependency direction verified:
+        internal/domain: zero imports (pure)
+        infra/*: imports domain + external only, no app imports
+        cmd/: only imports app/appwire and infra/sessionstore (permitted per ADR)
+        go.mod: unchanged (no new dependencies added)
+  - author: judge
+    at: "2026-03-24T12:00:00+08:00"
+    text: |-
+      ## Test Verification Report
+
+      **Verdict:** PASS
+
+      ### Acceptance Criteria Coverage
+      - [x] go build ./... passes with zero errors — VERIFIED
+      - [x] go test ./... all 7 packages pass, zero failures — VERIFIED
+      - [x] internal/domain/ has zero import of infra/app/SDK paths — VERIFIED (grep hits were comments only, not import statements)
+      - [x] appwire has no inline plugin.Config BeforeModelCallback — VERIFIED (debug plugin imported from internal/infra/debugplugin)
+      - [x] Old flat paths removed — VERIFIED: internal/agentdef/, internal/mcpconfig/, internal/memory/, internal/sessionstore/, internal/shelltool/, internal/appwire/ all return no such file
+      - [x] cmd/ thin entrypoints — VERIFIED: cmd/agent imports only appwire; cmd/telegram and cmd/web import appwire + infra/sessionstore, which ADR-0009 explicitly permits ("cmd/ MAY import internal/app/appwire and internal/infra/sessionstore")
+
+      ### Test Quality
+      - AAA structure: OK — existing tests follow AAA
+      - Naming: OK — descriptive test names
+      - Pyramid: OK — unit tests in infra packages, integration test in mcpconfig
+
+      ### Test Results
+      - Total: 7 packages
+      - Passed: 7
+      - Failed: 0
+
+      ### Dependency Direction
+      - internal/domain/: zero actual imports (pure, no deps)
+      - internal/infra/*: imports domain + external only, no app/ imports — VERIFIED
+      - internal/app/ imports infra/* as injected dependencies — correct
+      - cmd/: appwire only (sessionstore permitted by ADR) — VERIFIED
+      - go.mod: unchanged per build output
+
+      ### Notes
+      - Card acceptance criterion says no cmd/ file may import internal/infra/ at all, but ADR-0009 explicitly carves out the sessionstore exception. James correctly implemented per ADR. The card wording is stricter than the ADR; ADR takes precedence per architecture definition.
+      - internal/infra/debugplugin/plugin.go exists and wire.go references debugplugin.New() — extraction complete.
+  - author: jobs
+    at: "2026-03-24T13:30:00+08:00"
+    text: |-
+      ## Code Review by Jobs
+
+      **Overall Assessment:** LGTM WITH COMMENTS
+      **Code Health Impact:** Improves
+
+      ---
+
+      ### Critical Issues (Must Fix)
+
+      None.
+
+      ---
+
+      ### Should Fix
+
+      **1. `internal/app/ports.go:23` and `internal/app/appwire/wire.go:87-100` — ToolProvider port is defined but not consumed as an interface.**
+
+      The `ToolProvider` interface exists in `internal/app/ports.go` but `appwire.New()` builds MCP toolsets directly inline (lines 85-100 of wire.go) rather than accepting a `ToolProvider`. This means the port has no consumer and provides no isolation — the MCP subprocess construction is still tightly coupled to the assembly layer. The entire value of the Ports and Adapters pattern is that the Application Layer depends on the port abstraction, not the concrete adapter. As written, the port is architecturally correct but structurally orphaned.
+
+      Similarly, `AgentLoader` is declared in `domain/ports.go` but `appwire.New()` constructs `&agentdef.Loader{}` directly (wire.go:72) rather than accepting a `domain.AgentLoader`.
+
+      Neither injection point exists in `appwire.Config`. The ports are defined correctly but the wiring does not use them — defeating the testability goal stated in ADR-0009 ("Assembly (appwire) can be tested without starting real external processes"). Recommend adding `AgentLoader domain.AgentLoader` and `ToolProvider app.ToolProvider` (or equivalent) to `appwire.Config` with concrete defaults constructed when nil, or document explicitly in the ADR that port injection into appwire is deferred to a later card.
+
+      **2. `internal/infra/agentdef/loader.go:22-32` — `Definition` struct is now a Dispensable (Lazy Class).**
+
+      The `Definition` struct is an internal type that mirrors `domain.AgentDefinition` field-for-field. The `Loader.Load()` method (lines 39-49) constructs one `Definition` via the package-level `Load()` function and then immediately maps it to `domain.AgentDefinition`. This two-step mapping through an identical intermediate struct serves no purpose. Either inline the mapping directly into the package-level `Load()` function and return `*domain.AgentDefinition` from it, or remove the `Definition` type entirely. The current code violates the Dispensables principle — no client is served by this type that could not be served by the domain type directly.
+
+      ---
+
+      ### Nit
+
+      **Nit 1: `internal/infra/sessionstore/service.go` — stray double blank lines.**
+      Lines 44-46 (after `sessionMeta` struct) and lines 353-355 (before `jsonlSession` type) have two consecutive blank lines. Go style convention is a single blank line between top-level declarations.
+
+      **Nit 2: `internal/infra/agentdef/override.go:19` — `truncate` helper is not exported and has no doc comment.**
+      The `truncate` function at line 19 is a private helper placed before the exported `InstructionOverridePlugin`. While correct, positioning an unexported helper above the exported function that uses it is atypical in Go — helpers usually follow the function that uses them, or are grouped at the bottom. No functional issue, purely a readability point.
+
+      **Nit 3: `internal/infra/agentdef/override.go:48-52` — inconsistent brace indentation.**
+      The struct literal `&genai.Content{ Parts: ...}` on lines 48-51 has its closing brace at an inconsistent indent level compared to the Go standard `gofmt` style. This is likely a minor `gofmt` violation — worth running `gofmt -w` on the file.
+
+      **Nit 4: `cmd/agent/main.go:6-7` — package doc comment references old path.**
+      The comment says "assembles all components from internal/memory/" (line 7) — this should now read `internal/infra/memory/` after migration.
+
+      ---
+
+      ### Good Things
+
+      - The dependency direction is clean and verifiable: `internal/domain/` has zero imports — it is a pure Go package with only stdlib-free type declarations and interface definitions. This is exactly right and will remain trivially testable forever.
+      - The `mcpconfig` loader is a model of infra-to-domain mapping: internal JSON types for parsing, then an explicit mapping to `domain.MCPConfig` before returning. The domain layer owns its types; infrastructure owns the wire format. Textbook Ports and Adapters.
+      - The `debugplugin` extraction is well-executed. The extracted `beforeModelCallback` is a named function (not an anonymous closure), which makes it independently testable. No closures over assembly state, exactly as Jules specified in the refinement comment.
+      - `appwire.MemoryMetrics` and `appwire.ModelProfile` type aliases keep cmd/ clean without requiring cmd/ to import infra directly. This is a pragmatic, low-friction solution to a real coupling problem.
+      - The compile-time interface checks at the bottom of `sessionstore/service.go` (`var _ session.Service = (*jsonlService)(nil)` etc.) are excellent practice — they make interface satisfaction failures a compile error rather than a runtime surprise.
+      - ADR-0009 is thorough and self-consistent. The rationale for placing `ToolProvider` in `internal/app/` rather than `internal/domain/` (because it references `google.golang.org/adk/tool` types) is correctly documented and the reasoning is sound.
+      - All seven acceptance criteria verified by Judge. The migration is structurally complete.
+
+      ---
+
+      ### Code Smells Detected
+
+      | Smell | Location | Severity | Treatment |
+      |-------|----------|----------|-----------|
+      | Lazy Class | `internal/infra/agentdef/loader.go:22-32` (`Definition` struct) | SHOULD_FIX | Remove `Definition`; return `*domain.AgentDefinition` directly from package-level `Load()` |
+      | Speculative Generality | `internal/app/ports.go` + `internal/domain/ports.go` (ports with no injection points) | SHOULD_FIX | Wire ports into `appwire.Config` or document deferral explicitly |
+
+      ---
+
+      ### Recommended Next Steps
+
+      1. (Should Fix) Add `AgentLoader` and `ToolProvider` to `appwire.Config` as injectable dependencies (with concrete defaults), so the ports are actually consumed as interfaces and `appwire.New()` becomes testable without real file I/O or MCP subprocesses. If this is intentionally deferred to a later card, add a TODO comment in `wire.go` referencing the card number so the debt is tracked.
+      2. (Should Fix) Remove the `Definition` struct from `internal/infra/agentdef/loader.go` and return `*domain.AgentDefinition` directly from the package-level `Load()` function. This eliminates a Lazy Class with no clean-up cost.
+      3. (Nit) Run `gofmt -w internal/infra/agentdef/override.go` to fix the brace indentation.
+      4. (Nit) Update the `cmd/agent/main.go` package comment to reference `internal/infra/memory/` instead of `internal/memory/`.
+      5. (Future) Add the grep-based CI check documented in ADR-0009 Section "Testable Constraint" to the build pipeline so the dependency direction rule is machine-enforced going forward.
