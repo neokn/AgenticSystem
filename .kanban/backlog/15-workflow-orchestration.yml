@@ -1,4 +1,4 @@
-title: "Phase 2: Workflow 編排 — Sequential + Loop"
+title: "Phase 2: Workflow Patterns — 可重用的任務編排骨架"
 assignee: neokn
 labels:
   - backend
@@ -9,31 +9,79 @@ history:
   - stage: backlog
     at: 2026-03-23T00:00:00+08:00
 description: |
-  引入 ADK Workflow Agents，讓 Root 可以觸發多步驟任務流程。
+  在 Phase 1 的 agent tree 基礎設施之上，建立第一批可重用的 workflow patterns。
+  這些 pattern 是通用骨架，不綁特定 domain——任何需要「多步驟」或「迭代」的任務都能套用。
 
-  新增兩個通用 workflow pattern：
+  ─── 建構在 Phase 1 之上 ───
 
-  1. Plan-Execute-Report (SequentialAgent)
-     通用複雜任務骨架：理解需求 → 擬定計畫 → 執行 → 總結回報
-     適用：技術調研、程式重構、文件撰寫等任何多步驟任務
+    Phase 1 提供：宣告式 agent tree + Root routing + session state + transfer/escalate
+    Phase 2 提供：具體的 workflow pattern，用 ADK workflow agents 組合而成
 
-  2. Iterative Refinement (LoopAgent, max_iterations)
-     執行 → 檢查結果 → 不滿意就修正 → 重複
-     適用：寫 code 跑測試、寫文章修潤、等 API 完成（polling）
+    觸發/排程 → Root
+                  ├─ （簡單）直接處理
+                  ├─ （多步驟）→ Plan-Execute-Report pattern
+                  └─ （迭代）  → Iterative Refinement pattern
 
-  設計重點：
-    - State Layer：定義通用 state keys（user_intent, plan, artifacts, evaluation...）
-    - 每個 agent 像純函數：讀 state → 做事 → 寫 state
-    - Workflow pattern 是可重用的，不限特定 domain
+  ─── Pattern 1: Plan-Execute-Report（SequentialAgent）───
+
+    通用複雜任務骨架：
+
+      SequentialAgent
+        ├─ Planner   (LlmAgent) — 理解需求，擬定分步計畫，寫入 state
+        ├─ Executor  (LlmAgent) — 讀取計畫，逐步執行，產出 artifacts
+        └─ Reporter  (LlmAgent) — 彙整成果，總結回報
+
+    state 流動：user_intent → plan → artifacts → summary
+    適用場景：技術調研、程式重構、文件撰寫——任何「先想再做再報告」的任務
+
+  ─── Pattern 2: Iterative Refinement（LoopAgent）───
+
+    反覆逼近目標的迭代骨架：
+
+      LoopAgent (max_iterations)
+        └─ SequentialAgent
+             ├─ Worker    (LlmAgent) — 執行任務，產出 draft
+             └─ Evaluator (LlmAgent) — 檢查結果，判斷是否達標，寫 state 控制 loop 結束
+
+    state 流動：draft → evaluation → (不滿意) → revised_draft → re-evaluation → ...
+    結束條件：Evaluator 設定 escalate 或 state flag，或達到 max_iterations 安全上限
+    適用場景：寫 code 跑測試、修潤文章、polling 等待——任何「做完檢查、不滿意就重來」的任務
+
+  ─── 混合組合 ───
+
+    兩個 pattern 可以嵌套使用：
+
+      SequentialAgent (Plan-Execute-Report)
+        ├─ Planner
+        ├─ LoopAgent (Iterative Refinement)  ← Executor 階段用迭代
+        │    └─ Sequential[Worker, Evaluator]
+        └─ Reporter
+
+    Phase 1 的宣告式 config 讓這種組合在設定檔中描述，不需要改 Go code。
+
+  ─── 設計重點 ───
+
+    - Workflow-specific state keys 建立在 Phase 1 的通用 state schema 之上
+    - 每個 pattern 內的 agent 都是可替換的：換 prompt + tool 就變成不同 domain 的 workflow
+    - Root 根據意圖分析決定啟動哪個 pattern（或不啟動，直接處理）
+    - Pattern 定義在 config 中，作為可重用的 template
 tasks:
-  - text: 設計通用 State Schema（domain-agnostic state keys）
+  - text: "定義 workflow state keys 規範：user_intent, plan, artifacts, draft, evaluation, summary 等，作為 Phase 1 通用 state schema 的擴展"
     done: false
-  - text: 實作 Plan-Execute-Report SequentialAgent
+  - text: "在 agent tree config 中設計 workflow template 區塊：宣告式描述 pattern 結構 + 內部 agent 的 prompt/tool binding"
     done: false
-  - text: 實作 Iterative Refinement LoopAgent
+  - text: "實作 Plan-Execute-Report pattern：SequentialAgent + Planner/Executor/Reporter 三個 LlmAgent"
     done: false
-  - text: Root prompt 加入 workflow 觸發邏輯
+  - text: "撰寫 Planner / Executor / Reporter 的通用 prompt template（domain-agnostic）"
     done: false
-  - text: 端到端測試：複雜任務走完整 workflow
+  - text: "實作 Iterative Refinement pattern：LoopAgent + Sequential[Worker, Evaluator]"
+    done: false
+  - text: "撰寫 Worker / Evaluator 的通用 prompt template（含 loop 結束條件判斷）"
+    done: false
+  - text: "更新 Root Agent prompt：加入 workflow pattern 觸發邏輯（意圖 → 選擇 pattern）"
+    done: false
+  - text: "驗證嵌套組合：Plan-Execute-Report 中嵌入 Iterative Refinement"
+    done: false
+  - text: "端到端測試：複雜任務走完整 workflow → 產出正確 artifacts + summary"
     done: false
 comments: []

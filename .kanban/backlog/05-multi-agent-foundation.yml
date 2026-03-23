@@ -1,4 +1,4 @@
-title: "Phase 1: Multi-Agent 基礎設施 — Root + Specialists"
+title: "Phase 1: Agentic System 基礎架構 — Root + Agentic Loop + Composition"
 assignee: neokn
 labels:
   - backend
@@ -7,50 +7,72 @@ history:
   - stage: backlog
     at: 2026-03-23T00:00:00+08:00
 description: |
-  將現有單一 LlmAgent 架構演進為 Root + Specialist Agents 樹狀結構。
-  Root Agent（現有 demo_agent 演進）作為萬能私人助理的大腦，
-  能判斷意圖後 transfer 到 specialist agent，specialist 完成後 escalate 回 Root。
+  將現有單一 LlmAgent 演進為完整的 agentic system 基礎架構。
+  核心概念：清楚的 Root 入口，加上可組合的 agent tree，
+  讓任務在閉環 loop 中反覆「感知 → 決策 → 行動」直到達成目標。
 
-  目標架構：
-    Root Agent (LlmAgent — 私人助理大腦)
-      ├─ shell_agent   (LlmAgent — 系統操作/指令執行)
-      ├─ coder_agent   (LlmAgent — 程式碼理解/修改)
-      └─ search_agent  (LlmAgent — 知識檢索，掛 Weaviate tool)
+  ─── 三層架構 ───
 
-  設計原則：
-    - Root 自己能處理簡單對話，只在需要專業能力時 transfer
-    - 每個 specialist 只掛自己需要的 tool，降低 tool selection 複雜度
-    - Agent tree 由設定檔描述，不 hard-wire 在 Go code 裡
-    - ADK v1.0.0 的 llmagent.Config.SubAgents + agent transfer 機制
+    觸發層（Trigger）
+      排程 / Webhook / 使用者請求 → 喚醒 Root
 
-  關鍵改動：
-    - 升級 go.mod → ADK v1.0.0
-    - 設計 agent tree 設定檔格式
-    - 改造 agentdef 支援載入多個 agent prompt
-    - 改造 appwire 建構 agent tree
-    - 撰寫 root/shell/coder/search agent 的 prompt
-    - Tool 拆分到各自的 specialist
+    Root Agent（LlmAgent — 系統唯一入口）
+      接住所有觸發，判斷意圖，決定啟動哪個 workflow 或直接處理。
+      簡單請求自己完成，複雜任務 transfer 給 workflow / sub-agent。
+
+    Workflow + Agent 層（可組合的 ADK agent types）
+      ├─ SequentialAgent  — 固定步驟的多階段任務
+      ├─ LoopAgent        — 反覆逼近目標的迭代任務
+      ├─ ParallelAgent    — 併行多分支後彙整
+      └─ LlmAgent         — 末端具體執行者（掛 tool / MCP toolset）
+
+  ─── 兩層 Loop ───
+
+    1. Task-level agentic loop（ADK LlmAgent 內建）
+       每次任務內：read state → think → call tools/sub-agents → update state → 判斷完成
+       生命週期跟著任務走，達成條件或安全上限就結束。
+
+    2. System-level heartbeat（排程器週期性喚醒 Root）
+       每次喚醒開一輪新任務，跑完就結束，等下次觸發。
+       保證長期使命必達，不依賴永駐 process。
+
+  ─── 設計原則 ───
+
+    - Agent tree 由設定檔宣告式描述，不 hard-wire 在 Go code 裡
+    - 每個 agent 像純函數：讀 state → 做事 → 寫 state，透過 session state 溝通
+    - Workflow pattern 是通用骨架，不綁特定 domain（具體 pattern 見 Phase 2）
+    - Root 透過 transfer/escalate 與 sub-agent 雙向流動
+    - 善用 ADK agent types：LlmAgent、SequentialAgent、LoopAgent、ParallelAgent
+
+  ─── 本階段範圍 ───
+
+    Phase 1 聚焦「基礎設施」：讓 agent tree 可以被宣告、建構、運行。
+    不包含具體的 specialist 或 workflow pattern（那是 Phase 2-4 的事）。
+    驗收標準：Root 能載入 config → 遞迴建構 agent tree → transfer/escalate 正常運作。
+
+  ─── 心智模型 ───
+
+    先畫出：觸發/排程 → Root → 各種 workflow → 末端 sub-agent 的樹狀架構。
+    再決定：哪些地方需要「反覆靠近目標」就放 task-level loop，
+    哪些需要「長期自我維護」就用 heartbeat 不斷重啟 Root。
+    兩層 loop 共同保證任務使命必達。
 tasks:
-  - text: 升級 go.mod 鎖定 ADK v1.0.0
+  - text: "設計 agent tree 設定檔 schema：宣告式描述 Root → Workflow → Agent 樹結構、agent type mapping、tool binding"
     done: false
-  - text: 設計 agent tree 設定檔 schema（描述樹結構 + tool binding）
+  - text: "改造 agentdef 支援載入多個 agent definition（Root + 任意深度 sub-agents）"
     done: false
-  - text: 改造 agentdef 支援載入多個 agent definition
+  - text: "改造 appwire 遞迴建構 agent tree：根據 config 組合 LlmAgent / Sequential / Loop / Parallel"
     done: false
-  - text: 改造 appwire 遞迴建構 agent tree（Root + SubAgents）
+  - text: "實作 session state 通用 schema：定義 agent 間溝通的 state keys 規範"
     done: false
-  - text: 建立 agents/root_agent/ 目錄與 prompt（私人助理人格 + specialist routing）
+  - text: "建立 Root Agent prompt：意圖判斷 + workflow routing + 直接處理 fallback"
     done: false
-  - text: 建立 agents/shell_agent/ 目錄與 prompt（掛 shell_exec tool）
+  - text: "實作 transfer / escalate 雙向流動機制（Root ↔ Sub-Agent）"
     done: false
-  - text: 建立 agents/coder_agent/ 目錄與 prompt（掛 file read/write tool）
+  - text: "MCP toolset 可宣告式掛載到指定 agent（而非全掛 Root）"
     done: false
-  - text: 建立 agents/search_agent/ 目錄與 prompt（掛 Weaviate toolset）
+  - text: "端到端驗證：Root 載入 config → 建構 tree → 建一個 demo sub-agent → transfer/escalate 來回正常"
     done: false
-  - text: MCP toolset 掛到對應 specialist 而非全掛 root
-    done: false
-  - text: 驗證 transfer + escalate 行為（Root ↔ Specialist 來回）
-    done: false
-  - text: 加入測試
+  - text: 加入單元測試與整合測試
     done: false
 comments: []
