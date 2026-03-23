@@ -1,1 +1,8 @@
 .env
+data/
+.claude/
+
+# compiled binaries
+agent
+telegram
+web
