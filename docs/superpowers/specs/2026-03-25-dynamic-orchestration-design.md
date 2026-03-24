@@ -91,9 +91,11 @@ Phase 1 回傳 `{ "type": "direct", "response": "..." }` 時，跳過 Phase 2/3/
 
 ### PlanNode（遞迴）
 
-四種 type：
+五種 type。其中 `direct` **只能出現在頂層 `plan` 欄位**，不可作為 `sequential`/`loop`/`parallel` 的子節點。`PlanConverter` 遇到非頂層的 `direct` 必須回傳 validation error。
 
-#### `direct` — 不需要 workflow
+Gemini `response_schema` 用 union type 反映此限制：頂層 `plan` 接受 `direct | sequential | loop | parallel`，而 `steps[]` 只接受 `step | sequential | loop | parallel`。
+
+#### `direct` — 不需要 workflow（僅限頂層）
 
 ```json
 {
@@ -117,9 +119,17 @@ Phase 1 回傳 `{ "type": "direct", "response": "..." }` 時，跳過 Phase 2/3/
 {
   "type": "loop",
   "max_iterations": 3,
+  "exit_condition": {
+    "output_key": "evaluation",
+    "pattern": "APPROVED"
+  },
   "steps": [ /* PlanNode[] */ ]
 }
 ```
+
+`exit_condition`（可選）定義提前退出條件：每次迭代結束後，系統檢查 `session_state[output_key]` 是否包含 `pattern` 字串。匹配則提前結束 loop，不匹配則繼續迭代直到 `max_iterations`。
+
+ADK `LoopAgent` 透過 sub-agent escalation 實現提前退出。`PlanConverter` 將 `exit_condition` 轉換為 `BeforeAgentCallback`：每輪迭代開始前檢查上一輪的 state，若滿足條件則觸發 escalation 終止 loop。若未設定 `exit_condition`，loop 固定跑滿 `max_iterations`。
 
 #### `parallel` — 併行執行
 
@@ -150,9 +160,23 @@ Phase 1 回傳 `{ "type": "direct", "response": "..." }` 時，跳過 Phase 2/3/
 | `tools` | string[] | 否 | 從系統 tool registry 查找 |
 | `output_key` | string | 是 | session state key |
 
+注意：PlanNode **沒有 `name` 欄位**。ADK 要求 agent name 唯一且非空，由 `PlanConverter` 自動生成：
+- `step` → `"<role>_<index>"`（例如 `coder_0`、`coder_1`）
+- `sequential` → `"seq_<index>"`
+- `loop` → `"loop_<index>"`
+- `parallel` → `"par_<index>"`
+
+Index 是該節點在整棵樹中的 depth-first 序號，保證全域唯一。Root LLM 不需要關心命名。
+
 ### `{placeholder}` 語法
 
-Step 的 `instruction` 中可用 `{output_key}` 引用前序 step 的結果。系統執行時從 session state 取值替換。
+Step 的 `instruction` 中可用 `{output_key}` 引用其他 step 的結果。
+
+**替換時機：Agent 執行時（非 build time）。** Instruction 在 `AgentNodeConfig` 中保持為帶 placeholder 的 template 字串。`PlanConverter` 為每個動態建構的 LlmAgent 注入一個 `BeforeAgentCallback`，在 agent 執行前從當前 session state 取值替換 `{key}` placeholder。
+
+這對 loop 場景至關重要：第 N 次迭代的 `{evaluation}` 應取到第 N-1 次的結果，而非 build time 的空值。首次迭代若 placeholder 對應的 key 不存在，替換為空字串（agent 的 instruction 會自然處理「尚無前次 feedback」的情境）。
+
+實作上需要擴展 Builder 的 `Deps` struct，新增一個 `BeforeAgentCallback` factory，或在 `buildLLMAgent` 中接受 callback 參數。這是 Builder **唯一需要修改的部分**。
 
 ### 巢狀組合範例
 
@@ -240,9 +264,16 @@ Instruction 解析順序：
 3. 不存在 → `instruction` 欄位作為完整 system prompt
 4. `{output_key}` placeholder → 從 session state 取值替換
 
-### Builder（現有，不動）
+### Builder（現有，小幅修改）
 
-`internal/core/application/agenttree/builder.go` — 接收 `AgentNodeConfig` 遞迴建構 ADK agent tree。Input 來源從 YAML 變成 PlanConverter 的 output，Builder 本身不需修改。
+`internal/core/application/agenttree/builder.go` — 接收 `AgentNodeConfig` 遞迴建構 ADK agent tree。Input 來源從 YAML 變成 PlanConverter 的 output。
+
+需要修改的部分：
+- `Deps` struct 新增 `BeforeAgentCallback` factory，用於注入 `{placeholder}` 執行時替換邏輯
+- `buildLLMAgent` 接受並掛載 callback 到 LlmAgent
+- `buildLoopAgent` 接受並掛載 exit condition callback
+
+其餘遞迴建構邏輯不變。
 
 ---
 
@@ -279,7 +310,7 @@ Instruction 解析順序：
 | 元件 | 原因 |
 |------|------|
 | `internal/core/domain/agenttree.go` | `AgentNodeConfig` 被 PlanConverter 復用 |
-| `internal/core/application/agenttree/builder.go` | 核心 builder 不變 |
+| `internal/core/application/agenttree/builder.go` | 核心 builder，小幅修改（加 callback 支援） |
 | `agents/` 目錄結構 | 存放可選的 role template prompt |
 | Memory plugin / Shell tool / MCP toolset | 掛到動態 agent 上 |
 | Session / Persistence 層 | 不動 |
@@ -293,6 +324,39 @@ wire.go → Orchestrator{PlannerModel, Builder, Schemas, ...}
 ```
 
 Entrypoints（`cmd/agent`、`cmd/telegram`、`cmd/web`）呼叫 `orchestrator.Run()` 而非 `runner.Run()`。
+
+---
+
+## ADK Runner 生命週期
+
+動態編排下，每次 `orchestrator.Run()` 都建構不同的 agent tree，因此 ADK Runner 的管理方式改變：
+
+### 每次呼叫建構新 Runner
+
+```go
+func (o *Orchestrator) execute(ctx context.Context, agentTree agent.Agent, sess *session.Session) (map[string]any, error) {
+    r, err := runner.New(runner.Config{
+        AppName:        o.AppName,
+        Agent:          agentTree,       // 每次都是新建構的 agent tree
+        SessionService: o.SessionService, // 共用，持久化跨 request
+    })
+    // ... run and collect results
+}
+```
+
+- `runner.Runner`：每次 `execute()` 建新的（cheap — 只是包一層 agent reference）
+- `session.Service`：整個 Orchestrator 共用一個（持久化 session state 跨 request）
+- `session.Session`：每次 `orchestrator.Run()` 建新的，確保 state 隔離
+
+### Session State 隔離
+
+每次 `orchestrator.Run()` 建立一個新的 session ID（或使用 entrypoint 傳入的 session ID）。動態 agent 的 `output_key` 寫入此 session 的 state。不同 request 之間 state 不互相干擾。
+
+外層 loop 的重試共用同一個 session：第二輪 plan 可以看到第一輪的 state，讓 feedback 驅動的重新規劃能參考之前的結果。
+
+### Plugins
+
+Memory plugin、debug plugin 等在 `wire.go` 初始化時注入 Orchestrator，Orchestrator 在每次建構 Runner 時傳入。Plugin 是無狀態的，可以安全跨 Runner 復用。
 
 ---
 
