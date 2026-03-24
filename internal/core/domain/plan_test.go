@@ -281,3 +281,49 @@ func TestPlanOutput_Validate_should_accept_complex_nested_composite(t *testing.T
 		t.Errorf("expected no error for valid complex plan, got %v", err)
 	}
 }
+
+// TestPlanOutput_Validate_should_reject_loop_with_empty_steps verifies that
+// a loop node with valid max_iterations but empty steps is invalid.
+func TestPlanOutput_Validate_should_reject_loop_with_empty_steps(t *testing.T) {
+	p := &domain.PlanOutput{
+		Intent: "test",
+		Plan: domain.PlanNode{
+			Type:          domain.PlanTypeLoop,
+			MaxIterations: 3,
+		},
+	}
+
+	if err := p.Validate(); err == nil {
+		t.Fatal("expected error for loop without steps")
+	}
+}
+
+// TestPlanOutput_Validate_should_reject_unknown_type verifies that a plan
+// node with an unknown or empty type is invalid.
+func TestPlanOutput_Validate_should_reject_unknown_type(t *testing.T) {
+	p := &domain.PlanOutput{
+		Intent: "test",
+		Plan: domain.PlanNode{
+			Type: "bogus",
+		},
+	}
+
+	if err := p.Validate(); err == nil {
+		t.Fatal("expected error for unknown type")
+	}
+}
+
+// TestPlanOutput_Validate_should_reject_parallel_without_steps verifies that
+// a parallel node with no steps is invalid.
+func TestPlanOutput_Validate_should_reject_parallel_without_steps(t *testing.T) {
+	p := &domain.PlanOutput{
+		Intent: "test",
+		Plan: domain.PlanNode{
+			Type: domain.PlanTypeParallel,
+		},
+	}
+
+	if err := p.Validate(); err == nil {
+		t.Fatal("expected error for parallel without steps")
+	}
+}
