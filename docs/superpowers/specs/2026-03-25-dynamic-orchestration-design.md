@@ -129,7 +129,28 @@ Gemini `response_schema` 用 union type 反映此限制：頂層 `plan` 接受 `
 
 `exit_condition`（可選）定義提前退出條件：每次迭代結束後，系統檢查 `session_state[output_key]` 是否包含 `pattern` 字串。匹配則提前結束 loop，不匹配則繼續迭代直到 `max_iterations`。
 
-ADK `LoopAgent` 透過 sub-agent escalation 實現提前退出。`PlanConverter` 將 `exit_condition` 轉換為 `BeforeAgentCallback`：每輪迭代開始前檢查上一輪的 state，若滿足條件則觸發 escalation 終止 loop。若未設定 `exit_condition`，loop 固定跑滿 `max_iterations`。
+**實作機制：exit-checker custom agent。** ADK `LoopAgent` 只在 sub-agent event 帶有 `Actions.Escalate = true` 時提前終止。`BeforeAgentCallback` 無法觸發 escalation（ADK v1.0.0 限制）。
+
+因此 `PlanConverter` 在有 `exit_condition` 的 loop 中，自動注入一個 exit-checker 作為 loop body 的最後一個 sub-agent：
+
+```go
+exitChecker, _ := agent.New(agent.Config{
+    Name: "exit_checker_<index>",
+    Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+        return func(yield func(*session.Event, error) bool) {
+            val := ctx.Session().State[exitCondition.OutputKey]
+            if strings.Contains(val, exitCondition.Pattern) {
+                yield(&session.Event{
+                    Actions: session.EventActions{Escalate: true},
+                }, nil)
+            }
+            // 不 yield 任何東西 = 繼續下一輪迭代
+        }
+    },
+})
+```
+
+Loop body 變成：`Sequential[...原本的 steps, exit_checker]`。每輪迭代最後，exit-checker 檢查 state 並決定是否 escalate。若未設定 `exit_condition`，不注入 exit-checker，loop 固定跑滿 `max_iterations`。
 
 #### `parallel` — 併行執行
 
@@ -172,11 +193,11 @@ Index 是該節點在整棵樹中的 depth-first 序號，保證全域唯一。R
 
 Step 的 `instruction` 中可用 `{output_key}` 引用其他 step 的結果。
 
-**替換時機：Agent 執行時（非 build time）。** Instruction 在 `AgentNodeConfig` 中保持為帶 placeholder 的 template 字串。`PlanConverter` 為每個動態建構的 LlmAgent 注入一個 `BeforeAgentCallback`，在 agent 執行前從當前 session state 取值替換 `{key}` placeholder。
+**ADK 原生支援**：`llmagent.Config.Instruction` 本身就是 template——`{key_name}` 會在 LLM call 時自動從 session state 取值替換。這是 ADK 內建功能，不需要自己實作。
 
-這對 loop 場景至關重要：第 N 次迭代的 `{evaluation}` 應取到第 N-1 次的結果，而非 build time 的空值。首次迭代若 placeholder 對應的 key 不存在，替換為空字串（agent 的 instruction 會自然處理「尚無前次 feedback」的情境）。
+對 loop 場景：使用 `{key?}` 語法（加 `?`），ADK 會在 key 不存在時替換為空字串，首次迭代不會 panic。Plan JSON 中的 instruction 直接用 `{evaluation?}` 形式即可。
 
-實作上需要擴展 Builder 的 `Deps` struct，新增一個 `BeforeAgentCallback` factory，或在 `buildLLMAgent` 中接受 callback 參數。這是 Builder **唯一需要修改的部分**。
+`PlanConverter` 只需要將 plan 中的 `{output_key}` 原封不動傳給 `AgentNodeConfig.Instruction`，ADK 在執行時自動處理替換。**Builder 不需要為此做任何修改。**
 
 ### 巢狀組合範例
 
@@ -264,16 +285,15 @@ Instruction 解析順序：
 3. 不存在 → `instruction` 欄位作為完整 system prompt
 4. `{output_key}` placeholder → 從 session state 取值替換
 
-### Builder（現有，小幅修改）
+### Builder（現有，不動）
 
 `internal/core/application/agenttree/builder.go` — 接收 `AgentNodeConfig` 遞迴建構 ADK agent tree。Input 來源從 YAML 變成 PlanConverter 的 output。
 
-需要修改的部分：
-- `Deps` struct 新增 `BeforeAgentCallback` factory，用於注入 `{placeholder}` 執行時替換邏輯
-- `buildLLMAgent` 接受並掛載 callback 到 LlmAgent
-- `buildLoopAgent` 接受並掛載 exit condition callback
+**Builder 本身不需修改**：
+- `{placeholder}` 替換由 ADK `llmagent.Config.Instruction` 原生處理
+- Loop exit-checker 由 `PlanConverter` 在轉換階段注入為額外 sub-agent，對 Builder 而言只是多一個普通的 `AgentNodeConfig` 節點
 
-其餘遞迴建構邏輯不變。
+所有動態編排的複雜度集中在 `PlanConverter`，Builder 保持為純粹的「config → ADK agent」轉換器。
 
 ---
 
@@ -310,7 +330,7 @@ Instruction 解析順序：
 | 元件 | 原因 |
 |------|------|
 | `internal/core/domain/agenttree.go` | `AgentNodeConfig` 被 PlanConverter 復用 |
-| `internal/core/application/agenttree/builder.go` | 核心 builder，小幅修改（加 callback 支援） |
+| `internal/core/application/agenttree/builder.go` | 核心 builder 不動 |
 | `agents/` 目錄結構 | 存放可選的 role template prompt |
 | Memory plugin / Shell tool / MCP toolset | 掛到動態 agent 上 |
 | Session / Persistence 層 | 不動 |
