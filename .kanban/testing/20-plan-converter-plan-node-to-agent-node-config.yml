@@ -1,0 +1,54 @@
+id: 20-plan-converter
+title: "Implement PlanConverter — PlanNode to AgentNodeConfig"
+labels: [backend, core-logic]
+assignee: james
+description: |
+  Build a converter that transforms a PlanNode tree (from Root LLM JSON output)
+  into an AgentNodeConfig tree that the existing Builder can consume to construct
+  ADK agents.
+acceptance-criteria:
+  - step PlanNode maps to AgentNodeConfig with Type AgentTypeLLM
+  - sequential PlanNode maps to AgentNodeConfig with Type AgentTypeSequential
+  - loop PlanNode maps to AgentNodeConfig with Type AgentTypeLoop
+  - parallel PlanNode maps to AgentNodeConfig with Type AgentTypeParallel
+  - Auto-generated names are unique (depth-first counter)
+  - Template loader used when role has a template (instruction appended)
+  - Direct instruction used when no template exists
+  - Loop with exit_condition injects exit_checker_<N> sub-agent at end of body
+  - Loop body wrapped in a sequential agent
+  - Two steps with same role get different auto-generated names
+architecture-notes: |
+  Location: internal/core/application/orchestrator/
+  Package: orchestrator
+  Pure function — no I/O, no ADK imports.
+  TemplateLoader is a func type (port-style injection).
+tasks:
+  - description: "Write tests for step conversion"
+    done: true
+  - description: "Write tests for sequential conversion"
+    done: true
+  - description: "Write tests for loop with exit_condition"
+    done: true
+  - description: "Write tests for loop without exit_condition"
+    done: true
+  - description: "Write tests for parallel conversion"
+    done: true
+  - description: "Write tests for name uniqueness"
+    done: true
+  - description: "Write tests for template-based instruction"
+    done: true
+  - description: "Write tests for direct instruction (no template)"
+    done: true
+  - description: "Implement converter.go"
+    done: true
+history:
+  - stage: refined
+    at: "2026-03-25T00:00:00+00:00"
+  - stage: testing
+    at: "2026-03-25T00:00:00+00:00"
+comments:
+  - author: james
+    at: "2026-03-25T00:00:00+00:00"
+    text: 'Implementation complete. Files created: internal/core/application/orchestrator/converter.go, internal/core/application/orchestrator/converter_test.go. Patterns applied: none (simple function-based dispatch, counter closure for uniqueness). Tests: 10 passing (8 acceptance criteria + 2 edge cases for nil node and unknown type). go vet: clean. TDD cycle: Red (tests commit 8438774) → Green (impl commit 387af13). No refactor phase needed — code was clean on first pass.'
+completed-by:
+  in-progress: james

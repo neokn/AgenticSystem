@@ -1,0 +1,50 @@
+id: 40-orchestrator-core
+title: "Implement Orchestrator Core — 4-Phase Loop"
+labels: [backend, core-logic]
+assignee: james
+description: |
+  Build the Orchestrator — the heart of the dynamic orchestration system. It drives
+  a 4-phase loop: Plan → Execute → Evaluate → Respond, with an outer retry loop
+  when Phase 3 returns satisfied=false.
+acceptance-criteria:
+  - Planner returns direct plan → immediate return, no Execute/Evaluate/Respond called
+  - Plan → Execute → Evaluate(satisfied=true) → Respond → result returned
+  - First Evaluate unsatisfied → retry with feedback → second Evaluate satisfied → Respond
+  - Plan says max_retries=1, both evals unsatisfied → still Respond (forced by limit)
+  - Plan says max_retries=10 but system limit is 2 → respects system limit
+  - Planner returns invalid plan → error propagated
+  - Executor returns error → error propagated
+  - Domain logic is pure — no ADK/Gemini imports
+architecture-notes: |
+  Location: internal/core/application/orchestrator/
+  Package: orchestrator
+  Pure Application Layer — depends only on domain package and converter's TemplateLoader.
+  All external concerns abstracted behind interfaces: Planner, Evaluator, Responder, Executor.
+tasks:
+  - description: "Write test: TestOrchestrator_DirectPlan"
+    done: true
+  - description: "Write test: TestOrchestrator_SuccessfulExecution"
+    done: true
+  - description: "Write test: TestOrchestrator_RetryOnce"
+    done: true
+  - description: "Write test: TestOrchestrator_MaxRetriesExceeded"
+    done: true
+  - description: "Write test: TestOrchestrator_SystemHardLimit"
+    done: true
+  - description: "Write test: TestOrchestrator_PlanValidationError"
+    done: true
+  - description: "Write test: TestOrchestrator_ExecuteError"
+    done: true
+  - description: "Implement orchestrator.go — interfaces + Orchestrator struct + Run method"
+    done: true
+history:
+  - stage: in-progress
+    at: "2026-03-25T00:00:00+00:00"
+  - stage: testing
+    at: "2026-03-25T00:00:00+00:00"
+comments:
+  - author: james
+    at: "2026-03-25T00:00:00+00:00"
+    text: 'Implementation complete. Files created: internal/core/application/orchestrator/orchestrator.go, internal/core/application/orchestrator/orchestrator_test.go. Patterns applied: Ports and Adapters (Planner, Evaluator, Responder, Executor interfaces). Architecture: pure Application Layer — no ADK, Gemini, or I/O imports; depends only on domain package and converter TemplateLoader. Test results: 7 new tests passing (all scenarios), 22 total passing in package. go vet: clean. TDD cycle: Red (commit 941c6f5) — Green (commit 38cfd32). Retry logic uses min(plan.MaxRetries, SystemMaxRetry) to honour both plan-level and system-level hard limits.'
+completed-by:
+  in-progress: james
