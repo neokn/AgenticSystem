@@ -1,0 +1,62 @@
+id: 30-exit-checker-custom-agent
+title: "Implement Exit-Checker Custom Agent"
+labels: [backend, core-logic]
+assignee: james
+description: |
+  Custom agent that enables LoopAgent early termination. ADK's LoopAgent only
+  terminates early when a sub-agent emits an event with Actions.Escalate = true.
+  BeforeAgentCallback CANNOT trigger escalation (ADK v1.0.0 limitation).
+
+  The exit-checker is injected by PlanConverter as the last sub-agent in a loop
+  body. It checks session state for a pattern match and escalates if found.
+acceptance-criteria:
+  - NewExitChecker returns a non-nil agent.Agent
+  - exitCheckShouldEscalate returns true when val contains pattern
+  - exitCheckShouldEscalate returns false when val does not contain pattern
+  - exitCheckShouldEscalate returns false when val is empty
+  - exitCheckShouldEscalate returns false when pattern is empty
+  - Session state is read via State().Get() (interface, not map access)
+  - Escalation event emitted with Actions.Escalate = true when condition met
+architecture-notes: |
+  Location: internal/core/application/orchestrator/exitchecker.go
+  Package: orchestrator
+  Uses agent.New (custom agent) — ADK import required.
+  State read via ctx.Session().State().Get() — session.State is an interface.
+tasks:
+  - description: "Write tests for NewExitChecker constructor and exitCheckShouldEscalate predicate"
+    done: true
+  - description: "Implement exitchecker.go with NewExitChecker and exitCheckShouldEscalate"
+    done: true
+history:
+  - stage: in-progress
+    at: "2026-03-25T00:00:00+00:00"
+  - stage: testing
+    at: "2026-03-25T00:00:00+00:00"
+comments:
+  - author: james
+    at: "2026-03-25T00:00:00+00:00"
+    text: |
+      Implementation complete. TDD cycle applied strictly.
+
+      Red phase: exitchecker_test.go written first — 5 test cases covering
+      constructor (non-nil check, name check) and predicate logic (match, no-match,
+      empty val, empty pattern). Compilation failures confirmed as expected failures.
+
+      Green phase: exitchecker.go implemented with correct ADK types.
+      Key correction vs task spec: session.Session.State() returns session.State
+      interface (Get/Set/All methods), NOT a map. Used state.Get(key) + type
+      assertion instead of map indexing.
+
+      Files created:
+        internal/core/application/orchestrator/exitchecker.go
+        internal/core/application/orchestrator/exitchecker_test.go
+
+      Patterns: none — simple custom agent wrapping a pure predicate function.
+      Exception handling: agent.New error ignored (only errors on duplicate
+      sub-agents, which cannot occur here — no sub-agents). State.Get error
+      ignored — missing key treated as empty string, which correctly produces
+      no escalation.
+
+      Tests: 5 passing. go vet: clean.
+completed-by:
+  in-progress: james
