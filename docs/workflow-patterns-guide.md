@@ -1,318 +1,502 @@
-# Workflow Patterns 指南
+# 動態計畫 Patterns 指南
 
-> 本文件說明 AgenticSystem 提供的兩種核心 workflow pattern 的設計理念、state 流動方式，以及使用方式。
+> 本文件說明 AgenticSystem 的動態計畫結構，包含 Sequential、Loop、Parallel 三種節點類型的 JSON 表示、組合方式，以及 exit_condition 機制的運作原理。
 
 ---
 
 ## 目錄
 
 1. [設計理念](#設計理念)
-2. [State Keys 規範](#state-keys-規範)
-3. [Pattern 1: Plan-Execute-Report](#pattern-1-plan-execute-report)
-4. [Pattern 2: Iterative Refinement](#pattern-2-iterative-refinement)
-5. [混合組合：Plan-Iterate-Report](#混合組合plan-iterate-report)
-6. [Prompt Template 設計](#prompt-template-設計)
-7. [迴圈結束條件](#迴圈結束條件)
-8. [自訂 Workflow](#自訂-workflow)
+2. [PlanNode 結構](#plannode-結構)
+3. [Pattern 1: Sequential（循序執行）](#pattern-1-sequential循序執行)
+4. [Pattern 2: Loop（迭代執行）](#pattern-2-loop迭代執行)
+5. [Pattern 3: Parallel（並行執行）](#pattern-3-parallel並行執行)
+6. [嵌套組合](#嵌套組合)
+7. [exit_condition 機制](#exit_condition-機制)
+8. [output_key 流動設計](#output_key-流動設計)
 
 ---
 
 ## 設計理念
 
-Workflow pattern 的核心設計原則：
+動態計畫 pattern 的核心原則：
 
-1. **通用骨架**：Pattern 本身不綁任何 domain，換 prompt 就變成不同用途
-2. **State-driven**：Agent 之間透過 session state 溝通，不透過直接呼叫
-3. **可組合**：兩個 pattern 可以任意巢套，形成更複雜的 workflow
-4. **可觀測**：每個 agent 的輸出都存入可查詢的 state key
-
-### 為什麼不用單一 LlmAgent？
-
-對於簡單任務，Root Agent 自己處理就夠了。但複雜任務有以下問題：
-
-- **Token 限制**：一次 LLM call 很難完成需要多步驟的任務
-- **品質控制**：沒有「做完檢查」的機制，容易出錯
-- **可追蹤性**：一大段回覆很難知道哪一步出了問題
-- **可重試性**：如果某一步失敗，無法只重試該步驟
-
-Workflow pattern 透過拆分職責（規劃、執行、評估、報告）解決這些問題。
+1. **執行期生成**：計畫由 Planner LLM 在執行期根據使用者請求動態決定，不依賴靜態設定檔
+2. **JSON 表示**：計畫是結構化 JSON，可由 LLM 生成，也可測試驗證
+3. **State-driven**：Agent 之間透過 session state 溝通，output_key 決定資料流
+4. **可組合**：三種 pattern 可以任意嵌套，形成複雜的執行計畫
 
 ---
 
-## State Keys 規範
+## PlanNode 結構
 
-所有 workflow pattern 共用以下標準 state keys：
+所有計畫都是由 `PlanNode` 節點組成的樹狀結構：
 
-| Key | 類型 | 寫入者 | 讀取者 | 生命週期 |
-|-----|------|--------|--------|---------|
-| `user_intent` | string | Root Agent | Planner, Worker | 整個 workflow |
-| `plan` | string (Markdown) | Planner | Executor, Worker, Evaluator | 整個 workflow |
-| `artifacts` | string (Markdown) | Executor | Reporter | 整個 workflow |
-| `draft` | string | Worker | Evaluator | 每次迭代覆寫 |
-| `evaluation` | string (Markdown) | Evaluator | Worker | 每次迭代覆寫 |
-| `summary` | string (Markdown) | Reporter | Root Agent | workflow 結束時 |
+```go
+type PlanNode struct {
+    Type PlanNodeType `json:"type"` // "direct" | "sequential" | "loop" | "parallel" | "step"
 
-### State 命名慣例
+    // direct only
+    Response string `json:"response,omitempty"`
 
-- 使用 snake_case
-- 語義清晰，不加 prefix（不是 `workflow_plan`，而是 `plan`）
-- 每個 key 只有一個 canonical writer
-- Reader 透過 ADK 的 `{key?}` 語法讀取（`?` 表示 optional，首次迭代時不存在不會報錯）
+    // sequential / loop / parallel
+    Steps []PlanNode `json:"steps,omitempty"`
+
+    // loop only
+    MaxIterations uint           `json:"max_iterations,omitempty"`
+    ExitCondition *ExitCondition `json:"exit_condition,omitempty"`
+
+    // step only
+    Role        string   `json:"role,omitempty"`
+    Instruction string   `json:"instruction,omitempty"`
+    Tools       []string `json:"tools,omitempty"`
+    OutputKey   string   `json:"output_key,omitempty"`
+}
+
+type ExitCondition struct {
+    OutputKey string `json:"output_key"`
+    Pattern   string `json:"pattern"`
+}
+```
+
+頂層 `PlanOutput` 包含計畫樹加上元資料：
+
+```go
+type PlanOutput struct {
+    Intent     string   `json:"intent"`      // Planner 理解的使用者意圖
+    MaxRetries int      `json:"max_retries"` // 允許的重試次數
+    Plan       PlanNode `json:"plan"`        // 計畫樹根節點
+}
+```
+
+### Step 節點欄位說明
+
+| 欄位 | 說明 | 是否必填 |
+|------|------|---------|
+| `role` | agent role 名稱，對應 `agents/<role>/agent.prompt` | 是 |
+| `instruction` | 這次執行的具體指示，會附加在 role prompt 後面 | 是 |
+| `tools` | 允許使用的 tool 名稱列表（如 `shell_exec`）| 否 |
+| `output_key` | 輸出寫入的 session state key 名稱 | 是 |
 
 ---
 
-## Pattern 1: Plan-Execute-Report
+## Pattern 1: Sequential（循序執行）
 
-### 結構
+### 說明
+
+按 `steps` 列表順序依序執行每個子節點。前一個 step 的輸出會存入 session state，後續 step 透過 `{key?}` 語法讀取。
+
+### JSON 結構
+
+```json
+{
+  "type": "sequential",
+  "steps": [
+    {
+      "type": "step",
+      "role": "planner",
+      "instruction": "分析需求，制定執行計畫",
+      "output_key": "plan"
+    },
+    {
+      "type": "step",
+      "role": "executor",
+      "instruction": "根據 {plan?} 執行任務",
+      "tools": ["shell_exec"],
+      "output_key": "artifacts"
+    },
+    {
+      "type": "step",
+      "role": "reporter",
+      "instruction": "根據 {plan?} 和 {artifacts?} 整理成報告",
+      "output_key": "summary"
+    }
+  ]
+}
+```
+
+### 轉換後的 AgentNodeConfig
 
 ```
-SequentialAgent (plan_execute_report)
-  ├─ Planner   (LlmAgent, output_key: plan)
-  ├─ Executor  (LlmAgent, output_key: artifacts)
-  └─ Reporter  (LlmAgent, output_key: summary)
+seq_0 (SequentialAgent)
+  └─ planner_1   (LlmAgent, output_key: plan)
+  └─ executor_2  (LlmAgent, tools: [shell_exec], output_key: artifacts)
+  └─ reporter_3  (LlmAgent, output_key: summary)
 ```
 
-### State 流動
+### state 流動
 
 ```
-┌────────┐    plan    ┌──────────┐  artifacts  ┌──────────┐  summary
-│Planner │ ─────────► │ Executor │ ──────────► │ Reporter │ ────────►
-└────────┘            └──────────┘             └──────────┘
-     ▲                     │                        │
-     │                     │ 可使用 tools            │ escalate
-  user_intent              │ (shell_exec 等)        │ 回到 Root
+planner_1 → state["plan"] → executor_2 → state["artifacts"] → reporter_3 → state["summary"]
 ```
 
 ### 適用場景
 
-| 場景 | 範例 |
-|------|------|
-| 技術調研 | 「幫我研究 GraphQL vs REST 的優缺點並寫份報告」 |
-| 程式重構 | 「幫我把這個模組從 callback 改成 async/await」 |
-| 文件撰寫 | 「幫我寫一份 API 設計文件」 |
+| 場景 | 範例請求 |
+|------|---------|
+| 技術調研報告 | 「幫我研究 GraphQL vs REST 的優缺點並寫份報告」 |
 | 多步驟分析 | 「分析這個系統的效能瓶頸並提出三個改善方案」 |
-
-### 各 Agent 的角色
-
-#### Planner
-- **輸入**：使用者的原始需求
-- **輸出**：結構化的執行計畫（步驟、驗收標準、風險）
-- **原則**：步驟要具體可執行，不超過 7 步
-
-#### Executor
-- **輸入**：`{plan?}` 中的計畫
-- **輸出**：每個步驟的執行結果和產出
-- **原則**：忠實執行計畫，遇到問題記錄但繼續
-
-#### Reporter
-- **輸入**：`{plan?}` 和 `{artifacts?}`
-- **輸出**：使用者友善的最終報告
-- **原則**：站在使用者角度撰寫，誠實報告失敗
+| 文件撰寫 | 「幫我寫一份 API 設計文件」 |
 
 ---
 
-## Pattern 2: Iterative Refinement
+## Pattern 2: Loop（迭代執行）
 
-### 結構
+### 說明
+
+重複執行 `steps` 中的節點，直到 `exit_condition` 成立或達到 `max_iterations` 上限。適合「做完就檢查、不滿意就修改」的任務。
+
+### JSON 結構（無 exit_condition）
+
+```json
+{
+  "type": "loop",
+  "max_iterations": 5,
+  "steps": [
+    {
+      "type": "step",
+      "role": "worker",
+      "instruction": "根據 {evaluation?} 的回饋改善草稿",
+      "output_key": "draft"
+    },
+    {
+      "type": "step",
+      "role": "evaluator",
+      "instruction": "評估 {draft?}，若達標說明通過原因，否則列出問題",
+      "output_key": "evaluation"
+    }
+  ]
+}
+```
+
+不設定 `exit_condition` 時，迴圈執行滿 `max_iterations` 次後結束。
+
+### JSON 結構（含 exit_condition）
+
+```json
+{
+  "type": "loop",
+  "max_iterations": 5,
+  "exit_condition": {
+    "output_key": "evaluation",
+    "pattern": "PASS"
+  },
+  "steps": [
+    {
+      "type": "step",
+      "role": "worker",
+      "instruction": "根據 {evaluation?} 修改程式碼",
+      "tools": ["shell_exec"],
+      "output_key": "draft"
+    },
+    {
+      "type": "step",
+      "role": "evaluator",
+      "instruction": "執行測試，全部通過回覆 PASS，否則說明失敗原因",
+      "tools": ["shell_exec"],
+      "output_key": "evaluation"
+    }
+  ]
+}
+```
+
+### 轉換後的 AgentNodeConfig
 
 ```
-LoopAgent (iterative_refinement, max_iterations: 5)
-  └─ SequentialAgent (refinement_step)
-       ├─ Worker    (LlmAgent, output_key: draft)
-       └─ Evaluator (LlmAgent, output_key: evaluation)
+loop_0 (LoopAgent, max_iterations: 5)
+  └─ seq_3 (SequentialAgent — body wrapper)
+       └─ worker_1     (LlmAgent, tools: [shell_exec], output_key: draft)
+       └─ evaluator_2  (LlmAgent, tools: [shell_exec], output_key: evaluation)
+       └─ exit_checker_4  (sentinel, 監控 evaluation 是否含 "PASS")
 ```
 
-### State 流動
+`exit_checker` 是 `Convert()` 自動插入的 sentinel，不需要在計畫 JSON 中手動定義。
+
+### state 流動（迭代）
 
 ```
- ┌─────────────────────────────────────────────────────┐
- │                  LoopAgent                           │
- │                                                     │
- │  ┌────────┐   draft   ┌───────────┐  evaluation     │
- │  │ Worker │ ────────► │ Evaluator │ ─────┐          │
- │  └────────┘           └───────────┘      │          │
- │       ▲                                  │          │
- │       │              ┌───────────────────┘          │
- │       │              │                              │
- │       │         ┌────┴─────┐                        │
- │       │         │ 達標？    │                        │
- │       │         ├──────────┤                        │
- │       │    否   │ 繼續迴圈  │───── evaluation ──────┘
- │       └─────────┤          │      (修改建議)
- │                 ├──────────┤
- │            是   │ escalate │── 結束迴圈
- │                 └──────────┘
- │                                                     │
- └─────────────────────────────────────────────────────┘
+每輪:
+  worker_1 → state["draft"] → evaluator_2 → state["evaluation"] → exit_checker_4
+                                                                        │
+                                                       含 "PASS" → escalate（結束）
+                                                       不含 "PASS" → 繼續下一輪
 ```
 
 ### 適用場景
 
-| 場景 | 範例 |
-|------|------|
-| 寫程式碼 + 測試 | 「幫我寫一個排序函數，要確保單元測試通過」 |
+| 場景 | 範例請求 |
+|------|---------|
+| 程式碼撰寫 + 驗證 | 「幫我寫一個排序函數，確保通過所有邊界測試」 |
 | 文字潤飾 | 「幫我把這段文字改到專業水準」 |
 | 反覆修正 | 「幫我修正這段 SQL query 直到結果正確」 |
-| 產出 + 驗證 | 任何「做完要檢查」的任務 |
-
-### 各 Agent 的角色
-
-#### Worker
-- **首次迭代**：根據需求產出第一版草稿
-- **後續迭代**：讀取 `{evaluation?}` 的回饋，修改草稿
-- **輸出**：工作草稿，存入 `draft`
-- **原則**：針對回饋修改，不推翻好的部分
-
-#### Evaluator
-- **輸入**：`{draft?}` 中的最新草稿
-- **輸出**：評估結果，存入 `evaluation`
-- **達標時**：escalate 結束迴圈
-- **未達標時**：列出問題和修改建議，不 escalate
-
-### 迴圈結束條件
-
-迴圈在以下任一條件達成時結束：
-
-1. **Evaluator escalate**：品質達標，評估者主動結束
-2. **max_iterations 達到**：安全上限，防止無限迴圈
-3. **context window 耗盡**：ADK 內建的安全機制
-
-建議總是設定合理的 `max_iterations`（推薦 3-5），避免浪費 token。
 
 ---
 
-## 混合組合：Plan-Iterate-Report
+## Pattern 3: Parallel（並行執行）
 
-### 結構
+### 說明
+
+同時執行所有 `steps` 節點，各自在獨立的 session 分支中運行。適合需要多角度分析、不互相依賴的任務。
+
+### JSON 結構
+
+```json
+{
+  "type": "parallel",
+  "steps": [
+    {
+      "type": "step",
+      "role": "executor",
+      "instruction": "從安全角度審查程式碼",
+      "output_key": "security_review"
+    },
+    {
+      "type": "step",
+      "role": "executor",
+      "instruction": "從效能角度審查程式碼",
+      "output_key": "performance_review"
+    },
+    {
+      "type": "step",
+      "role": "executor",
+      "instruction": "從可維護性角度審查程式碼",
+      "output_key": "maintainability_review"
+    }
+  ]
+}
+```
+
+### 轉換後的 AgentNodeConfig
 
 ```
-SequentialAgent (plan_iterate_report)
-  ├─ Planner      (LlmAgent, output_key: plan)
-  ├─ LoopAgent    (iterate_execute, max_iterations: 5)
-  │   └─ SequentialAgent (iterate_step)
-  │        ├─ Worker    (LlmAgent, output_key: draft)
-  │        └─ Evaluator (LlmAgent, output_key: evaluation)
-  └─ Reporter     (LlmAgent, output_key: summary)
+par_0 (ParallelAgent)
+  └─ executor_1  (LlmAgent, output_key: security_review)
+  └─ executor_2  (LlmAgent, output_key: performance_review)
+  └─ executor_3  (LlmAgent, output_key: maintainability_review)
 ```
 
-### State 流動
+### state 流動
+
+三個 step 並行執行，各自寫入不同的 output_key，不互相干擾：
 
 ```
-Planner ──plan──► LoopAgent ┐
-                            │
-              ┌─────────────┘
-              │
-              │  Worker ──draft──► Evaluator ──evaluation──►
-              │    ▲                    │
-              │    └────────────────────┘  (迴圈)
-              │                    │
-              │              escalate 結束
-              │                    │
-              └────────────────────┘
-                                   │
-                            Reporter ──summary──► Root
+par_0 ──┬── executor_1 → state["security_review"]
+        ├── executor_2 → state["performance_review"]
+        └── executor_3 → state["maintainability_review"]
 ```
 
 ### 適用場景
 
-| 場景 | 範例 |
+| 場景 | 範例請求 |
+|------|---------|
+| 多角度審查 | 「幫我從安全、效能、可維護性三個角度審查這段程式碼」 |
+| 多方案生成 | 「給我三個不同的架構方案」 |
+| 獨立子任務 | 「同時整理前三季的銷售數據」 |
+
+---
+
+## 嵌套組合
+
+三種 pattern 可以任意嵌套，形成複雜的執行計畫。
+
+### Sequential 嵌套 Loop（規劃 + 迭代 + 報告）
+
+```json
+{
+  "type": "sequential",
+  "steps": [
+    {
+      "type": "step",
+      "role": "planner",
+      "instruction": "制定重構計畫",
+      "output_key": "plan"
+    },
+    {
+      "type": "loop",
+      "max_iterations": 5,
+      "exit_condition": { "output_key": "evaluation", "pattern": "ALL_PASS" },
+      "steps": [
+        {
+          "type": "step",
+          "role": "worker",
+          "instruction": "根據 {plan?} 執行重構，根據 {evaluation?} 修正",
+          "tools": ["shell_exec"],
+          "output_key": "draft"
+        },
+        {
+          "type": "step",
+          "role": "evaluator",
+          "instruction": "執行測試，全部通過回覆 ALL_PASS",
+          "tools": ["shell_exec"],
+          "output_key": "evaluation"
+        }
+      ]
+    },
+    {
+      "type": "step",
+      "role": "reporter",
+      "instruction": "根據 {plan?} 和最終 {draft?} 產出重構報告",
+      "output_key": "summary"
+    }
+  ]
+}
+```
+
+### Sequential 嵌套 Parallel（研究 + 多角度整理 + 報告）
+
+```json
+{
+  "type": "sequential",
+  "steps": [
+    {
+      "type": "step",
+      "role": "planner",
+      "instruction": "確定調研範圍",
+      "output_key": "plan"
+    },
+    {
+      "type": "parallel",
+      "steps": [
+        {
+          "type": "step",
+          "role": "executor",
+          "instruction": "調研技術面",
+          "output_key": "tech_research"
+        },
+        {
+          "type": "step",
+          "role": "executor",
+          "instruction": "調研市場面",
+          "output_key": "market_research"
+        }
+      ]
+    },
+    {
+      "type": "step",
+      "role": "reporter",
+      "instruction": "彙整 {tech_research?} 和 {market_research?} 產出完整報告",
+      "output_key": "summary"
+    }
+  ]
+}
+```
+
+### 轉換後的樹狀結構
+
+```
+seq_0
+  └─ planner_1     (LlmAgent)
+  └─ par_2         (ParallelAgent)
+  │    └─ executor_3  (LlmAgent, output_key: tech_research)
+  │    └─ executor_4  (LlmAgent, output_key: market_research)
+  └─ reporter_5    (LlmAgent)
+```
+
+---
+
+## exit_condition 機制
+
+### 運作原理
+
+`exit_condition` 讓 Loop 在品質達標時提前結束，而不必跑完所有 `max_iterations`。
+
+Planner 在計畫中指定：
+- `output_key`：要監控哪個 state key
+- `pattern`：當該 key 的值包含此子字串時，結束迴圈
+
+`Convert()` 在轉換 loop 節點時，自動在每輪迭代的最後插入一個 `exit_checker` sentinel agent：
+
+```go
+// converter.go — 自動插入 exit_checker
+if node.ExitCondition != nil {
+    exitChecker := domain.AgentNodeConfig{
+        Name:        "exit_checker_" + itoa(checkerIdx),
+        Type:        domain.AgentTypeLLM,
+        Instruction: "__EXIT_CHECKER__",
+        OutputKey:   node.ExitCondition.OutputKey + "|" + node.ExitCondition.Pattern,
+    }
+    bodySubAgents = append(bodySubAgents, exitChecker)
+}
+```
+
+### exit_checker 邏輯
+
+`exitchecker.go` 的 `NewExitChecker` 建立一個輕量 sentinel agent：
+
+```
+每輪結束前：
+  1. 讀取 session state[OutputKey]
+  2. 檢查值是否包含 Pattern（子字串，大小寫敏感）
+  3. 若包含 → 發出 event.Actions.Escalate = true → LoopAgent 停止
+  4. 若不包含 → 不發出 event → LoopAgent 繼續下一輪
+```
+
+### Pattern 設計建議
+
+| Pattern 設計 | 建議 | 說明 |
+|-------------|------|------|
+| 獨特性 | `"PASS"` 比 `"ok"` 好 | 避免與正常輸出混淆 |
+| 大小寫 | 固定大寫 | exit_checker 是大小寫敏感比對 |
+| 語義清晰 | `"ALL_PASS"` 或 `"APPROVED"` | evaluator prompt 和 pattern 需一致 |
+
+### 迴圈結束條件總覽
+
+| 條件 | 說明 |
 |------|------|
-| 帶測試的重構 | 「幫我重構這個模組並確保所有測試通過」 |
-| 完整功能開發 | 「幫我實作排序功能，包含程式碼和測試」 |
-| 優化 + 報告 | 「幫我優化這個演算法的效能並寫測試報告」 |
+| exit_checker 發出 escalate | `exit_condition.pattern` 在指定 state key 中被偵測到 |
+| max_iterations 達到 | 安全上限，防止無限迴圈 |
+| ADK context window 耗盡 | ADK 內建保護機制 |
+
+建議永遠設定合理的 `max_iterations`（3–7），即使有 `exit_condition` 也一樣，作為防護底線。
 
 ---
 
-## Prompt Template 設計
+## output_key 流動設計
 
-每個 workflow agent 的 prompt 都遵循統一的結構：
+### 設計原則
 
-```
-# 你是 <角色名> -- <一句話描述>
+- 每個 step 節點有且只有一個 `output_key`（唯一寫入者）
+- 後續 step 透過 `{key?}` 語法讀取（`?` 表示 optional，首次迭代 key 不存在不報錯）
+- loop 中每輪迭代的 step 會覆寫相同的 key（如 `draft`、`evaluation`）
 
-## 職責
-（這個 agent 要做什麼）
+### 常見 output_key 慣例
 
-## 輸入來源
-（從哪些 state key 讀取資料）
+| output_key | 通常用於 | 通常由誰讀取 |
+|-----------|---------|-----------|
+| `plan` | planner role 的輸出 | executor / worker role |
+| `artifacts` | executor role 的產出 | reporter role |
+| `draft` | worker role 的草稿 | evaluator role |
+| `evaluation` | evaluator role 的評估 | worker role (下一輪) + exit_checker |
+| `summary` | reporter role 的最終摘要 | Responder (Phase 4) |
 
-## 輸出格式
-（輸出的格式和存入的 state key）
+### 自訂 output_key
 
-## 原則
-（工作原則和限制）
-```
+Planner 可以自由定義 output_key 名稱，只要保持一致即可：
 
-### Prompt 中的 State 變數
-
-ADK 支援在 instruction 中使用 `{key}` 語法注入 session state：
-
-```
-你可以從以下 state 讀取資訊：
-- 計畫：{plan?}
-- 上一版草稿：{draft?}
-- 評估回饋：{evaluation?}
-```
-
-`?` 後綴表示 optional — 如果 key 不存在不會報錯（首次迭代時有用）。
-
-### 通用性設計
-
-所有 prompt 都是 domain-agnostic（不綁特定領域）。
-同一組 workflow 可以處理不同類型的任務：
-
-- 「寫一份技術報告」→ Planner 規劃報告結構，Executor 撰寫各章節
-- 「重構一段程式碼」→ Planner 規劃重構步驟，Executor 執行程式碼修改
-- 「優化演算法效能」→ Planner 分析瓶頸，Executor 實施優化
-
-差異完全來自使用者的需求描述，workflow 的骨架不變。
-
----
-
-## 自訂 Workflow
-
-你可以在 `agenttree.yaml` 中自由定義新的 workflow pattern。
-只要遵循 ADK agent types 的組合規則，任何結構都是合法的。
-
-### 範例：Parallel Review（多人審查）
-
-```yaml
-- name: parallel_review
-  type: parallel
-  description: "Multiple reviewers examine the draft in parallel."
-  sub_agents:
-    - name: security_reviewer
-      type: llm
-      description: "Reviews for security vulnerabilities."
-      output_key: security_review
-    - name: performance_reviewer
-      type: llm
-      description: "Reviews for performance issues."
-      output_key: performance_review
+```json
+{
+  "type": "sequential",
+  "steps": [
+    {
+      "type": "step",
+      "role": "executor",
+      "instruction": "分析程式碼架構",
+      "output_key": "code_analysis"
+    },
+    {
+      "type": "step",
+      "role": "executor",
+      "instruction": "根據 {code_analysis?} 識別重構機會",
+      "output_key": "refactor_opportunities"
+    },
+    {
+      "type": "step",
+      "role": "reporter",
+      "instruction": "根據 {refactor_opportunities?} 產出重構建議",
+      "output_key": "recommendations"
+    }
+  ]
+}
 ```
 
-### 範例：Multi-stage Pipeline
-
-```yaml
-- name: pipeline
-  type: sequential
-  sub_agents:
-    - name: stage1_research
-      type: llm
-      output_key: research
-    - name: stage2_draft
-      type: llm
-      output_key: draft
-    - name: stage3_review
-      type: parallel
-      sub_agents:
-        - name: tech_review
-          type: llm
-          output_key: tech_review
-        - name: style_review
-          type: llm
-          output_key: style_review
-    - name: stage4_final
-      type: llm
-      output_key: final
-```
+重要原則：output_key 名稱在計畫 JSON 中的 `output_key` 和後續 step instruction 的 `{key?}` 佔位符必須完全一致。
