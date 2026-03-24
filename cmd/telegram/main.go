@@ -10,15 +10,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/joho/godotenv"
-	"google.golang.org/genai"
-
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/session"
 
 	"github.com/neokn/agenticsystem/internal/core/application"
 	"github.com/neokn/agenticsystem/internal/infra/persistence/jsonl"
@@ -44,7 +39,6 @@ func runBot(ctx context.Context) error {
 
 	app, err := application.New(ctx, apiKey, application.Config{
 		AgentDir:       ".",
-		AgentName:      "demo_agent",
 		AppName:        "telegram_bot_app",
 		SessionService: jsonl.NewJSONLService("data/sessions"),
 	})
@@ -58,33 +52,14 @@ func runBot(ctx context.Context) error {
 		}
 
 		chatID := update.Message.Chat.ID
-		userID := strconv.FormatInt(update.Message.From.ID, 10)
-		sessionID := fmt.Sprintf("tg-%d", chatID)
 
-		// Ensure session exists (Create is idempotent — no-op if already present).
-		if _, err := app.SessionService.Create(ctx, &session.CreateRequest{
-			AppName:   app.AppName,
-			UserID:    userID,
-			SessionID: sessionID,
-		}); err != nil {
-			slog.Error("telegram-bot: failed to ensure session", "error", err)
-			return
-		}
-
-		userMsg := genai.NewContentFromText(update.Message.Text, genai.RoleUser)
+		result, err := app.Orchestrator.Run(ctx, update.Message.Text)
 		reply := ""
-
-		for event, err := range app.Runner.Run(ctx, userID, sessionID, userMsg, agent.RunConfig{}) {
-			if err != nil {
-				slog.Error("telegram-bot: agent error", "error", err)
-				continue
-			}
-			if event.Content == nil {
-				continue
-			}
-			for _, p := range event.Content.Parts {
-				reply += p.Text
-			}
+		if err != nil {
+			slog.Error("telegram-bot: orchestrator error", "error", err)
+			reply = "(internal error)"
+		} else {
+			reply = result.Response
 		}
 
 		if reply == "" {

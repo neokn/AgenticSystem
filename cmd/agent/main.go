@@ -25,9 +25,7 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
-	"google.golang.org/genai"
 
-	"google.golang.org/adk/agent"
 	"google.golang.org/adk/session"
 
 	"github.com/neokn/agenticsystem/internal/core/application"
@@ -130,7 +128,6 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 
 	app, err := application.New(ctx, apiKey, application.Config{
 		AgentDir:       ".",
-		AgentName:      "demo_agent",
 		AppName:        "demo_agent_app",
 		SessionService: session.InMemoryService(),
 	})
@@ -138,15 +135,6 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 		return fmt.Errorf("assembling app: %w", err)
 	}
 
-	userID := "demo_user"
-	sessResp, err := app.SessionService.Create(ctx, &session.CreateRequest{
-		AppName: app.AppName,
-		UserID:  userID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-	sess := sessResp.Session
 	memPlugin := app.MemoryPlugin
 
 	// Step 8: Conversation loop
@@ -178,34 +166,13 @@ func runDemo(ctx context.Context, cfg cliConfig, input io.Reader, output io.Writ
 
 		turnCount++
 
-		// Send user message to agent
-		userMsg := genai.NewContentFromText(line, genai.RoleUser)
+		// Send user message to orchestrator.
+		result, err := app.Orchestrator.Run(ctx, line)
 		responseText := ""
-		isOOM := false
-
-		for event, err := range app.Runner.Run(ctx, userID, sess.ID(), userMsg, agent.RunConfig{}) {
-			if err != nil {
-				fmt.Fprintf(errOutput, "AGENT_ERROR: %v\n", err)
-				continue
-			}
-			// Event embeds model.LLMResponse by value; check Content field directly.
-			if event.Content == nil {
-				// Check for OOM warning in CustomMetadata
-				if meta := event.CustomMetadata; meta != nil {
-					if _, ok := meta["oom_warning"]; ok {
-						isOOM = true
-						fmt.Fprintf(errOutput, "OOM_WARNING: Context window exhausted. Please start a new conversation.\n")
-					}
-				}
-				continue
-			}
-			for _, p := range event.Content.Parts {
-				responseText += p.Text
-			}
-		}
-
-		if isOOM && responseText == "" {
-			responseText = "[OOM] Context window exhausted. Please start a new conversation."
+		if err != nil {
+			fmt.Fprintf(errOutput, "AGENT_ERROR: %v\n", err)
+		} else {
+			responseText = result.Response
 		}
 
 		fmt.Fprintln(output, responseText)

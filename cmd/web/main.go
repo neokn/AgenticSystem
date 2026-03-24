@@ -1,20 +1,25 @@
-// Package main launches the AgenticSystem with ADK's built-in Web UI.
+// Package main launches the AgenticSystem with a simple HTTP API.
 //
 // Usage:
 //
 //	go run ./cmd/web/main.go
+//
+// The server listens on :9090 and exposes a single POST endpoint:
+//
+//	POST /run
+//	Body: plain text user prompt
+//	Response: plain text orchestrator response
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"os"
 
 	"github.com/joho/godotenv"
-
-	"google.golang.org/adk/agent"
-	"google.golang.org/adk/cmd/launcher"
-	"google.golang.org/adk/cmd/launcher/full"
 
 	"github.com/neokn/agenticsystem/internal/core/application"
 	"github.com/neokn/agenticsystem/internal/infra/persistence/jsonl"
@@ -32,7 +37,6 @@ func run() error {
 
 	app, err := application.New(ctx, apiKey, application.Config{
 		AgentDir:       ".",
-		AgentName:      "demo_agent",
 		AppName:        "web_app",
 		SessionService: jsonl.NewJSONLService("data/sessions"),
 	})
@@ -40,22 +44,33 @@ func run() error {
 		return fmt.Errorf("assembling app: %w", err)
 	}
 
-	// Default args: web --port 9090 api webui --api_server_address http://localhost:9090/api
-	args := os.Args[1:]
-	if len(args) == 0 {
-		args = []string{
-			"web", "--port", "9090",
-			"api",
-			"webui", "--api_server_address", "http://localhost:9090/api",
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /run", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
 		}
-	}
+		prompt := string(body)
+		if prompt == "" {
+			http.Error(w, "empty prompt", http.StatusBadRequest)
+			return
+		}
 
-	l := full.NewLauncher()
-	return l.Execute(ctx, &launcher.Config{
-		SessionService: app.SessionService,
-		AgentLoader:    agent.NewSingleLoader(app.Agent),
-		PluginConfig:   app.PluginConfig,
-	}, args)
+		result, err := app.Orchestrator.Run(r.Context(), prompt)
+		if err != nil {
+			slog.Error("web: orchestrator error", "error", err)
+			http.Error(w, "orchestrator error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprint(w, result.Response)
+	})
+
+	addr := ":9090"
+	slog.Info("web: starting server", "addr", addr)
+	return http.ListenAndServe(addr, mux)
 }
 
 func main() {
