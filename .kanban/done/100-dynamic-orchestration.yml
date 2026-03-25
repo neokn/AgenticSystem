@@ -1,0 +1,233 @@
+title: "Dynamic Orchestration — Root LLM 動態編排"
+labels: [backend, core-logic]
+assignee: jobs
+history:
+  - stage: review
+    at: "2026-03-25T00:00:00+08:00"
+completed-by:
+  review: "jobs"
+comments:
+  - author: jobs
+    at: "2026-03-25T00:00:00+08:00"
+    text: |
+      ## Code Review by Jobs
+
+      **Overall Assessment:** LGTM WITH COMMENTS
+      **Code Health Impact:** Improves
+
+      This is a substantial, well-executed refactor. The 4-phase orchestration
+      loop is cleanly implemented, the architecture compliance is excellent, and
+      the test coverage is thorough. The comments below are a mix of Should Fix
+      and Nits — none are blockers.
+
+      ---
+
+      ### Critical Issues (Must Fix)
+
+      None.
+
+      ---
+
+      ### Should Fix
+
+      **1. `SystemInstruction` role should be `genai.RoleUser` is wrong — it should be a system-role signal**
+
+      `internal/infra/llm/planner.go:53`, `evaluator.go:48`, `responder.go:47`
+
+      All three LLM adapters construct the system instruction as:
+
+          SystemInstruction: genai.NewContentFromText(sysInstr, genai.RoleUser)
+
+      `SystemInstruction` in the Gemini SDK is the dedicated field for the
+      system prompt. It is passed separately from the `contents` array and does
+      not participate in the role-based turn structure. Passing `genai.RoleUser`
+      here is likely harmless today (the SDK probably ignores the role for this
+      field), but it is semantically incorrect and may break if the SDK becomes
+      stricter. The correct role for a system-level instruction, when a role is
+      needed at all, is `genai.RoleModel` or the SDK constant for "system". Check
+      the Gemini Go SDK docs and use the appropriate sentinel. At minimum, add a
+      comment explaining why `RoleUser` is intentional if it truly is.
+
+      **2. `itoa` is duplicated across two packages**
+
+      `internal/core/domain/agenttree.go:170` and
+      `internal/core/application/orchestrator/converter.go:176`
+
+      The same private `itoa` function — same logic, same comment ("without
+      importing strconv") — is copy-pasted into two separate packages. This is a
+      Duplicate Code smell. Both packages already import only stdlib and domain;
+      neither can import the other. The correct fix is to promote `itoa` to
+      `internal/core/domain/strings.go` (or a shared `internal/pkg/strutil`
+      package) and re-use it from both call sites. Since `converter.go` is in the
+      application layer it is allowed to depend on domain, so this is a clean
+      dependency direction. The domain-side version already handles negative
+      numbers; the converter-side version does not — another argument for
+      consolidation.
+
+      **3. `executor.go` hard-codes the user ID `"orchestrator"`**
+
+      `internal/infra/executor/executor.go:95`
+
+      ```go
+      CreateRequest{AppName: e.AppName, UserID: "orchestrator"}
+      ```
+
+      The string `"orchestrator"` appears twice (Create + Get) with no constant
+      or field. This is a magic string. If the caller ever needs to scope
+      sessions by real user ID (e.g., to isolate Telegram users), this becomes
+      a Shotgun Surgery problem. Introduce a field `UserID string` on
+      `ADKExecutor` (defaulting to `"orchestrator"` in wire.go) or at minimum
+      extract a package-level constant `const defaultUserID = "orchestrator"`.
+
+      **4. `session.KeyPrefixTemp` — raw string comparison is fragile**
+
+      `internal/infra/executor/executor.go:136`
+
+      ```go
+      if len(k) >= 5 && k[:5] == session.KeyPrefixTemp {
+      ```
+
+      The magic number `5` is the assumed length of `session.KeyPrefixTemp`.
+      If the ADK upstream ever changes the constant's value, this silently
+      breaks. Replace with `strings.HasPrefix(k, session.KeyPrefixTemp)` which
+      is both more readable and immune to length changes.
+
+      **5. `exit_condition` in `exitConditionSchema()` has a misleading description**
+
+      `internal/infra/llm/schema.go:155`
+
+      The `pattern` field description says "Regex pattern; loop exits when a
+      match is found." However, the actual exit-checker implementation in
+      `exitchecker.go` uses `strings.Contains` — not a regex match. The
+      description in the schema misleads the LLM into generating regex syntax
+      (e.g., `"APPROVED.*"`) when the runtime only does a substring check. This
+      is a correctness mismatch between the schema prompt and the implementation.
+      Fix: change the schema description to say "Substring; loop exits when the
+      output contains this string." Also update `plan.prompt` line 28 which also
+      says "regex".
+
+      ---
+
+      ### Nit
+
+      **N1. `exit_checker` OutputKey encoding uses `|` as a delimiter — undocumented**
+
+      `internal/core/application/orchestrator/converter.go:122`
+
+      ```go
+      OutputKey: node.ExitCondition.OutputKey + "|" + node.ExitCondition.Pattern,
+      ```
+
+      This is a clever encoding, but the `|` separator is an implicit protocol
+      between `converter.go` and the Builder/executor. There is no comment
+      explaining the convention, and no validation that `OutputKey` or `Pattern`
+      themselves contain `|`. Add a comment: `// Encoded as "<output_key>|<pattern>"
+      — the Builder decodes this sentinel in AgentTypeLLM handling.` Also
+      consider using a named struct or a decode helper instead of string splitting
+      in the Builder if it ever needs to unpack this.
+
+      **N2. `wire.go` shadows the stdlib identifier `exec`**
+
+      `internal/core/application/wire.go:198`
+
+      ```go
+      exec := &executor.ADKExecutor{...}
+      ```
+
+      `exec` is a stdlib package name (os/exec). Go allows this shadowing but
+      it reduces readability. Rename to `adkExec` or `agentExec`.
+
+      **N3. `helpers_test.go` re-implements `strings.Contains`**
+
+      `internal/infra/llm/helpers_test.go:306–316`
+
+      The `contains()` and `indexSubstr()` helpers in the test file avoid
+      importing `strings` by re-implementing substring search. Given that this is
+      test code (not production code), there is no value in the
+      zero-dependency discipline here. Use `strings.Contains()` directly and
+      delete the two helpers.
+
+      **N4. `respond.prompt` mixes languages**
+
+      `prompts/respond.prompt` contains a hard-coded `永遠用繁體中文（台灣）回覆使用者`
+      instruction ("Always reply in Traditional Chinese (Taiwan)"). This is a
+      product decision, not a bug — but it makes the system useless for
+      non-Chinese speakers and is invisible to reviewers who scan only Go files.
+      If multi-language support is a future concern, consider making the language
+      instruction a runtime config parameter rather than a hardcoded prompt line.
+      (Nit — no action required now.)
+
+      **N5. `PlanOutput.Validate()` accepts a pointer receiver but `PlanNode`
+      validation uses pointer parameter**
+
+      `internal/core/domain/plan.go:61`
+
+      Minor inconsistency: `Validate()` has a pointer receiver `*PlanOutput` but
+      `validatePlanNode()` takes `*PlanNode`. Both are fine, but the test file
+      creates `&domain.PlanOutput{...}` and calls `.Validate()` — everything is
+      consistent. This is purely a style observation; no change needed.
+
+      ---
+
+      ### Good Things
+
+      - **Architecture compliance is excellent.** Port interfaces (`Planner`,
+        `Evaluator`, `Responder`, `Executor`) are defined in the application
+        layer, implementations live in infra, and the domain layer has zero
+        external imports. Dependency arrows are correct throughout.
+
+      - **The `ExitChecker` design is clean.** Encoding the ADK escalation
+        constraint as a first-class sub-agent rather than fighting the ADK
+        callback model is the right call. The spec alignment is precise.
+
+      - **`TemplateLoader` as a function type** (not an interface) is the right
+        call for a single-method dependency — it keeps the injection point simple
+        and avoids unnecessary interface churn.
+
+      - **`counter` in `converter.go`** guarantees globally unique ADK agent
+        names through depth-first traversal — elegant and correct.
+
+      - **Test coverage is exceptional.** Every phase of the orchestrator has
+        unit tests, integration tests validate the full Plan→Execute→Evaluate→
+        Respond wiring, and the converter tests verify structural output, not just
+        error returns. The `verifyingExecutor` approach in `integration_test.go`
+        is a good pattern.
+
+      - **`compile-time interface checks`** in `interfaces.go` — these blank
+        var assignments are a Go best practice that prevents silent drift between
+        ports and implementations. Good hygiene.
+
+      - **`formatResults()` sorts keys** for deterministic output — a small but
+        important detail for testability and LLM prompt stability.
+
+      - **`plan.prompt` is well-written.** The guidance on `{output_key?}`
+        optional syntax, the nesting depth warning, and the `max_retries` cap
+        are all good constraints that will reduce LLM hallucinations.
+
+      ---
+
+      ### Code Smells Detected
+
+      | Smell | Location | Severity | Treatment |
+      |-------|----------|----------|-----------|
+      | Duplicate Code | `domain/agenttree.go:170` + `orchestrator/converter.go:176` — `itoa` copy-pasted | SHOULD_FIX | Extract to shared `domain` or `internal/pkg/strutil` |
+      | Magic String | `executor/executor.go:95` — hard-coded `"orchestrator"` user ID | SHOULD_FIX | Extract to constant or `ADKExecutor.UserID` field |
+      | Magic Number | `executor/executor.go:136` — `k[:5]` assumes `KeyPrefixTemp` length | SHOULD_FIX | Replace with `strings.HasPrefix` |
+      | Speculative Comment | `schema.go:155` — description says "Regex" but impl does substring | SHOULD_FIX | Fix description to match actual behavior |
+
+      ---
+
+      ### Recommended Next Steps
+
+      1. **Fix the regex-vs-substring mismatch** (Should Fix #5) — this affects
+         LLM behavior in production since the model will generate the wrong
+         pattern format. Priority: high.
+      2. **Fix `SystemInstruction` role** (Should Fix #1) — verify the correct
+         genai SDK constant and update all three adapters.
+      3. **Eliminate `itoa` duplication** (Should Fix #2) — short task, high
+         code-health value.
+      4. **Fix `strings.HasPrefix` for `KeyPrefixTemp`** (Should Fix #4) — one
+         line change, eliminates fragile magic number.
+      5. **Extract `"orchestrator"` user ID** (Should Fix #3) — adds
+         extensibility without complexity.
+      6. The Nits can be addressed in a follow-up polish pass.
