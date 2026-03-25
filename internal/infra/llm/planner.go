@@ -50,7 +50,7 @@ func (p *GeminiPlanner) Plan(
 	}
 
 	config := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(sysInstr, genai.RoleUser),
+		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: sysInstr}}},
 		ResponseMIMEType:  "application/json",
 		ResponseSchema:    PlanSchema(),
 	}

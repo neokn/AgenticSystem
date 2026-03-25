@@ -25,7 +25,7 @@ Use when: the task has multiple ordered steps where each step may depend on the 
 ### `loop`
 Use when: the task requires iterative refinement — e.g., writing code and running tests, drafting and polishing text.
 - Set `max_iterations` to a reasonable upper bound (typically 3–5).
-- Provide an `exit_condition` with `output_key` (which step output to inspect) and `pattern` (regex that signals success).
+- Provide an `exit_condition` with `output_key` (which step output to inspect) and `pattern` (substring that signals success when found).
 - Loop body steps run repeatedly until the exit condition matches or max_iterations is reached.
 
 ### `parallel`
@@ -45,7 +45,7 @@ The leaf node type used inside `sequential`, `loop`, and `parallel` containers.
 - `max_retries`: set based on task complexity. Use `0` for simple tasks, `1` for moderate complexity, `2` for tasks likely to need refinement. Never exceed `2` for typical requests.
 - Write `step` instructions as if briefing a capable but context-free LLM — be specific and self-contained.
 - Use `{output_key?}` in instructions to inject prior step results (the `?` makes it optional; the step proceeds even if the key is absent).
-- For `loop` nodes: the `exit_condition.pattern` is a regex matched against the string value at `exit_condition.output_key`. Loop exits early when a match is found.
+- For `loop` nodes: the `exit_condition.pattern` is a substring checked against the string value at `exit_condition.output_key`. Loop exits early when the value contains the substring.
 - Keep plans as flat as possible. Nesting more than 2 levels deep is rarely necessary.
 
 ## Output Schema
@@ -77,7 +77,7 @@ Output valid JSON matching this structure exactly:
     "max_iterations": <positive integer>,
     "exit_condition": {
       "output_key": "<key to inspect>",
-      "pattern": "<regex pattern>"
+      "pattern": "<substring to match>"
     }
   }
 }

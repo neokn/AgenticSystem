@@ -10,6 +10,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/neokn/agenticsystem/internal/core/domain"
 )
@@ -62,7 +63,7 @@ func convertNode(node *domain.PlanNode, loader TemplateLoader, c *counter, baseD
 // Instruction: template + "\n\n" + node.Instruction (if template found), else node.Instruction.
 func convertStep(node *domain.PlanNode, loader TemplateLoader, c *counter, baseDir string) (*domain.AgentNodeConfig, error) {
 	idx := c.next()
-	name := node.Role + "_" + itoa(idx)
+	name := node.Role + "_" + strconv.Itoa(idx)
 
 	instruction := node.Instruction
 	if loader != nil {
@@ -84,7 +85,7 @@ func convertStep(node *domain.PlanNode, loader TemplateLoader, c *counter, baseD
 // Name: "seq_<index>"
 func convertSequential(node *domain.PlanNode, loader TemplateLoader, c *counter, baseDir string) (*domain.AgentNodeConfig, error) {
 	idx := c.next()
-	name := "seq_" + itoa(idx)
+	name := "seq_" + strconv.Itoa(idx)
 
 	subAgents, err := convertSteps(node.Steps, loader, c, baseDir)
 	if err != nil {
@@ -104,7 +105,7 @@ func convertSequential(node *domain.PlanNode, loader TemplateLoader, c *counter,
 // If ExitCondition is set, an exit_checker sentinel node is appended to the body.
 func convertLoop(node *domain.PlanNode, loader TemplateLoader, c *counter, baseDir string) (*domain.AgentNodeConfig, error) {
 	loopIdx := c.next()
-	loopName := "loop_" + itoa(loopIdx)
+	loopName := "loop_" + strconv.Itoa(loopIdx)
 
 	// Convert body steps
 	bodySubAgents, err := convertSteps(node.Steps, loader, c, baseDir)
@@ -116,7 +117,7 @@ func convertLoop(node *domain.PlanNode, loader TemplateLoader, c *counter, baseD
 	if node.ExitCondition != nil {
 		checkerIdx := c.next()
 		exitChecker := domain.AgentNodeConfig{
-			Name:        "exit_checker_" + itoa(checkerIdx),
+			Name:        "exit_checker_" + strconv.Itoa(checkerIdx),
 			Type:        domain.AgentTypeLLM,
 			Instruction: "__EXIT_CHECKER__",
 			OutputKey:   node.ExitCondition.OutputKey + "|" + node.ExitCondition.Pattern,
@@ -127,7 +128,7 @@ func convertLoop(node *domain.PlanNode, loader TemplateLoader, c *counter, baseD
 	// Wrap body in a sequential agent so one iteration = run all steps in order
 	seqIdx := c.next()
 	bodyWrapper := domain.AgentNodeConfig{
-		Name:      "seq_" + itoa(seqIdx),
+		Name:      "seq_" + strconv.Itoa(seqIdx),
 		Type:      domain.AgentTypeSequential,
 		SubAgents: bodySubAgents,
 	}
@@ -144,7 +145,7 @@ func convertLoop(node *domain.PlanNode, loader TemplateLoader, c *counter, baseD
 // Name: "par_<index>"
 func convertParallel(node *domain.PlanNode, loader TemplateLoader, c *counter, baseDir string) (*domain.AgentNodeConfig, error) {
 	idx := c.next()
-	name := "par_" + itoa(idx)
+	name := "par_" + strconv.Itoa(idx)
 
 	subAgents, err := convertSteps(node.Steps, loader, c, baseDir)
 	if err != nil {
@@ -171,18 +172,3 @@ func convertSteps(steps []domain.PlanNode, loader TemplateLoader, c *counter, ba
 	return subAgents, nil
 }
 
-// itoa converts a non-negative int to its decimal string representation
-// without importing strconv, keeping this package free of unnecessary deps.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
-}

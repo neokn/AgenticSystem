@@ -45,7 +45,7 @@ func (e *GeminiEvaluator) Evaluate(
 	}
 
 	config := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(e.SystemPrompt, genai.RoleUser),
+		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: e.SystemPrompt}}},
 		ResponseMIMEType:  "application/json",
 		ResponseSchema:    EvalSchema(),
 	}

@@ -9,6 +9,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/plugin"
@@ -18,6 +19,9 @@ import (
 	"github.com/neokn/agenticsystem/internal/core/application/agenttree"
 	"github.com/neokn/agenticsystem/internal/core/domain"
 )
+
+// defaultUserID is used as the ADK user identifier for orchestrator-initiated sessions.
+const defaultUserID = "orchestrator"
 
 // ADKExecutor implements orchestrator.Executor using the existing
 // agenttree.Builder and the ADK Runner.
@@ -92,7 +96,7 @@ func (e *ADKExecutor) Execute(ctx context.Context, cfg *domain.AgentNodeConfig) 
 	// -----------------------------------------------------------------------
 	createResp, err := e.SessionService.Create(ctx, &session.CreateRequest{
 		AppName: e.AppName,
-		UserID:  "orchestrator",
+		UserID:  defaultUserID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("executor: creating session: %w", err)
@@ -105,7 +109,7 @@ func (e *ADKExecutor) Execute(ctx context.Context, cfg *domain.AgentNodeConfig) 
 	// The agent tree derives its work context from instruction + session state,
 	// not from a user message, so we pass nil for the message content.
 	// -----------------------------------------------------------------------
-	for event, err := range r.Run(ctx, "orchestrator", sessID, nil, agent.RunConfig{}) {
+	for event, err := range r.Run(ctx, defaultUserID, sessID, nil, agent.RunConfig{}) {
 		if err != nil {
 			return nil, fmt.Errorf("executor: running agent: %w", err)
 		}
@@ -117,7 +121,7 @@ func (e *ADKExecutor) Execute(ctx context.Context, cfg *domain.AgentNodeConfig) 
 	// -----------------------------------------------------------------------
 	getResp, err := e.SessionService.Get(ctx, &session.GetRequest{
 		AppName:   e.AppName,
-		UserID:    "orchestrator",
+		UserID:    defaultUserID,
 		SessionID: sessID,
 	})
 	if err != nil {
@@ -133,7 +137,7 @@ func (e *ADKExecutor) Execute(ctx context.Context, cfg *domain.AgentNodeConfig) 
 	// -----------------------------------------------------------------------
 	results := make(map[string]any)
 	for k, v := range getResp.Session.State().All() {
-		if len(k) >= 5 && k[:5] == session.KeyPrefixTemp {
+		if strings.HasPrefix(k, session.KeyPrefixTemp) {
 			continue
 		}
 		results[k] = v

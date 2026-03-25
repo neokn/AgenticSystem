@@ -152,7 +152,7 @@ func exitConditionSchema() *genai.Schema {
 			},
 			"pattern": {
 				Type:        genai.TypeString,
-				Description: "Regex pattern; loop exits when a match is found.",
+				Description: "Substring match; loop exits when the value at output_key contains this substring.",
 			},
 		},
 		Required: []string{"output_key", "pattern"},

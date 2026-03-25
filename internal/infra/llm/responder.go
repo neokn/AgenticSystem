@@ -44,7 +44,7 @@ func (r *GeminiResponder) Respond(
 	}
 
 	config := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(r.SystemPrompt, genai.RoleUser),
+		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: r.SystemPrompt}}},
 		// No ResponseMIMEType or ResponseSchema — free-form text output.
 	}
 
