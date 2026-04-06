@@ -1,9 +1,0 @@
-{
-  "servers": [
-    {
-      "name": "example-mcp-server",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    }
-  ]
-}

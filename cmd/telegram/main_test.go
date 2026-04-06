@@ -5,47 +5,30 @@ import (
 	"testing"
 )
 
-// should_return_error_when_bot_token_not_set verifies the fail-fast acceptance
-// criterion: if TELEGRAM_BOT_TOKEN is not set, checkBotToken returns an error
-// containing the expected message.
-func Test_checkBotToken_should_return_error_when_bot_token_not_set(t *testing.T) {
-	// Arrange
+func Test_loadSystemPrompt_strips_frontmatter(t *testing.T) {
+	content := "---\nmodel: gemini-3-flash\n---\n{{role \"system\"}}\n\nHello world\n"
+	tmp := t.TempDir() + "/test.prompt"
+	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadSystemPrompt(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Hello world"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func Test_run_fails_without_token(t *testing.T) {
 	original := os.Getenv("TELEGRAM_BOT_TOKEN")
 	os.Unsetenv("TELEGRAM_BOT_TOKEN")
 	defer os.Setenv("TELEGRAM_BOT_TOKEN", original)
 
-	// Act
-	err := checkBotToken()
-
-	// Assert
+	err := run()
 	if err == nil {
-		t.Fatal("expected error when TELEGRAM_BOT_TOKEN is not set, got nil")
-	}
-	want := "TELEGRAM_BOT_TOKEN is not set"
-	if err.Error() != want {
-		t.Errorf("got %q, want %q", err.Error(), want)
-	}
-}
-
-// should_return_nil_when_bot_token_is_set verifies checkBotToken passes when
-// the environment variable is present.
-func Test_checkBotToken_should_return_nil_when_bot_token_is_set(t *testing.T) {
-	// Arrange
-	original := os.Getenv("TELEGRAM_BOT_TOKEN")
-	os.Setenv("TELEGRAM_BOT_TOKEN", "fake-token-for-test")
-	defer func() {
-		if original == "" {
-			os.Unsetenv("TELEGRAM_BOT_TOKEN")
-		} else {
-			os.Setenv("TELEGRAM_BOT_TOKEN", original)
-		}
-	}()
-
-	// Act
-	err := checkBotToken()
-
-	// Assert
-	if err != nil {
-		t.Errorf("expected nil error when token is set, got: %v", err)
+		t.Fatal("expected error when TELEGRAM_BOT_TOKEN is not set")
 	}
 }
