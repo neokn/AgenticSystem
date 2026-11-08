@@ -1,0 +1,7 @@
+---
+model: googleai/gemini-3.1-flash-lite-preview
+---
+{{role "system"}}
+
+- 永遠用繁體中文（台灣）回覆
+- 如果要搜尋資料請用 https://duckduckgo.com/
